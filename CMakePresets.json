@@ -1,0 +1,35 @@
+{
+    "version": 10,
+    "configurePresets": [
+        {
+            "name": "windows-base",
+            "hidden": true,
+            "architecture": "x64",
+            "binaryDir": "${sourceDir}/build/${presetName}",
+            "cacheVariables": {
+                "CMAKE_SYSTEM_VERSION": "10.0.22621.0",
+                "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
+            }
+        },
+        {
+            "name": "vs2026",
+            "inherits": "windows-base",
+            "generator": "Visual Studio 18 2026"
+        },
+        {
+            "name": "vs2022",
+            "inherits": "windows-base",
+            "generator": "Visual Studio 17 2022"
+        }
+    ],
+    "buildPresets": [
+        { "name": "vs2026-release", "configurePreset": "vs2026", "configuration": "Release" },
+        { "name": "vs2026-debug", "configurePreset": "vs2026", "configuration": "Debug" },
+        { "name": "vs2022-release", "configurePreset": "vs2022", "configuration": "Release" },
+        { "name": "vs2022-debug", "configurePreset": "vs2022", "configuration": "Debug" }
+    ],
+    "testPresets": [
+        { "name": "vs2026-release", "configurePreset": "vs2026", "configuration": "Release", "output": { "outputOnFailure": true } },
+        { "name": "vs2022-release", "configurePreset": "vs2022", "configuration": "Release", "output": { "outputOnFailure": true } }
+    ]
+}
