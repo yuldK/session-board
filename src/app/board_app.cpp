@@ -3,11 +3,14 @@
 #include "core/host_window.h"
 #include "luil/generated/codicons.h"
 
+#include <nlohmann/json.hpp>
+
 #include <shellapi.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <fstream>
 #include <functional>
 #include <string>
 #include <utility>
@@ -703,7 +706,7 @@ namespace session_board {
         constexpr float widget_gap { 6.0f };
         constexpr float widget_icon_button { 24.0f };
         constexpr float widget_group_header { 28.0f };
-        constexpr float widget_footer_height { 28.0f };
+        constexpr float widget_footer_height { 30.0f };
         constexpr float widget_setting_row { 26.0f };
         constexpr float widget_row_inset { 12.0f };
 
@@ -1302,11 +1305,11 @@ namespace session_board {
 
     std::unique_ptr<luil::root_element> board_driver::make_widget_tree(const std::int64_t now)
     {
-        constexpr float padding { static_cast<float>(widget_padding) };
+        constexpr float caption_height { static_cast<float>(widget_caption_height) };
         const float scale { metrics_.scale > 0.0f ? metrics_.scale : 1.0f };
         const float width { metrics_.width > 0.0f ? metrics_.width : static_cast<float>(widget_width) * scale };
         const float height { metrics_.height > 0.0f ? metrics_.height : static_cast<float>(widget_height) * scale };
-        const float inner_width { width / scale - 2.0f * padding };
+        const float inner_width { width / scale };
         auto root { std::make_unique<luil::root_element>() };
         root->arrange({ { 0.0f, 0.0f, width, height }, scale });
 
@@ -1320,16 +1323,16 @@ namespace session_board {
         const auto attention { std::ranges::count_if(visible, [now](const auto* session) { return group_of(*session, now) == session_group::attention; }) };
         const auto running { std::ranges::count_if(visible, [now](const auto* session) { return group_of(*session, now) == session_group::running; }) };
 
-        const luil::stack_config content_config { .spacing = widget_gap, .padding = luil::edge_insets::all(padding) };
-        auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-content" }, content_config) };
+        // 머릿줄과 바닥 줄이 창 너비 전체를 덮고 그 사이를 목록 영역이 채운다. 창 모서리는 DWM이 둥글게 자른다.
+        auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-content" }, luil::stack_config {}) };
 
         // 머릿줄: 키 컬러로 채워 목록과 가른다. 빈 자리를 잡아 창을 옮긴다 (widget_window의 HTCAPTION).
-        const luil::stack_config caption_config { .direction = luil::stack_direction::row, .spacing = 2.0f, .padding = { 8.0f, 0.0f, 6.0f, 0.0f }, .cross_alignment = luil::stack_alignment::center };
+        const luil::stack_config caption_config { .direction = luil::stack_direction::row, .spacing = 2.0f, .padding = { 12.0f, 0.0f, 8.0f, 0.0f }, .cross_alignment = luil::stack_alignment::center };
         auto caption { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-header" }, caption_config) };
         caption->add(std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_label, u8"widget-grip" }, luil::glyph_config { .glyph = luil::codicons::icon_gripper, .font_size = 14.0f }),
             { .length = 16.0f, .cross_length = 16.0f });
         caption->add_gap(4.0f);
-        caption->add_flexible(label(u8"widget-title", u8"Session Board", 12.0f));
+        caption->add_flexible(label(u8"widget-title", u8"Session Board", 14.0f));
         if (inner_width >= 340.0f)
             caption->add_fit(label(u8"widget-count", u8"확인 " + u8(std::to_string(attention)) + u8" · 진행 " + u8(std::to_string(running)), 11.0f, luil::label_color_role::dim));
         caption->add_gap(4.0f);
@@ -1344,34 +1347,33 @@ namespace session_board {
         add_button(widget_button(u8"compact-close", u8"위젯 닫기", luil::codicons::icon_chrome_close, command_action(0)));
         luil::panel_config caption_surface {};
         caption_surface.background = [](const luil::ui_color_palette& palette) { return palette.accent; };
-        caption_surface.corner_radius = 8.0f;
         auto caption_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-caption" }, caption_surface) };
         caption_panel->set_content(std::make_unique<palette_scope>(u8"widget-caption-tint", caption_tint, std::move(caption)));
-        content->add(std::move(caption_panel), static_cast<float>(widget_caption_height));
+        content->add(std::move(caption_panel), caption_height);
 
         luil::scroll_area_element* scroll_metrics { nullptr };
         if (!collapsed_)
         {
-            float used { 2.0f * padding + static_cast<float>(widget_caption_height) + widget_gap };
+            const luil::stack_config region_config { .spacing = widget_gap, .padding = luil::edge_insets::all(widget_gap) };
+            auto region { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-region-body" }, region_config) };
+            float used { caption_height + 1.0f + widget_footer_height + 2.0f * widget_gap };
             if (backdrop_settings_open_)
             {
-                // 배경 효과와 진하기다. 팝업을 띄우지 않고 머릿줄 아래에 펼친다 — 위젯 창은 바탕이 투명하다.
+                // 흐림과 진하기다. 팝업을 띄우지 않고 머릿줄 아래에 펼친다 — 위젯 창은 바탕이 투명하다.
                 const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 6.0f } };
                 auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-settings" }, settings_config) };
                 const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
-                luil::choice_group_config effect { .owner = u8"widget-backdrop-choice", .style = luil::choice_style::toggle, .name = u8"배경 효과" };
-                effect.items = { { u8"backdrop-blur", u8"흐림" }, { u8"backdrop-transparent", u8"투명" }, { u8"backdrop-opaque", u8"불투명" } };
-                effect.selected = backdrop_ == widget_backdrop::blur ? u8"backdrop-blur" : backdrop_ == widget_backdrop::transparent ? u8"backdrop-transparent" : u8"backdrop-opaque";
-                effect.select = [](const std::u8string& value) {
-                    const std::uint32_t command { value == u8"backdrop-blur" ? backdrop_blur_command : value == u8"backdrop-transparent" ? backdrop_transparent_command : backdrop_opaque_command };
-                    return luil::input_action { luil::app_ui_command { command } };
-                };
+                // DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 스위치도 앱 UI 명령으로 답한다.
+                const bool blur { backdrop_ == widget_backdrop::blur };
+                luil::check_config effect { .owner = u8"widget-blur", .style = luil::check_style::toggle_switch, .label = u8"흐림", .checked = blur };
+                effect.toggle = command_action(blur ? backdrop_transparent_command : backdrop_blur_command);
+                effect.tooltip = u8"끄면 뒤가 흐리지 않고 그대로 비칩니다";
                 auto effect_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-backdrop-row" }, row_config) };
                 effect_row->add(label(u8"widget-backdrop-name", u8"배경", 11.0f, luil::label_color_role::dim), 40.0f);
-                effect_row->add_flexible(std::make_unique<luil::choice_group_element>(std::move(effect)));
+                effect_row->add_flexible(std::make_unique<luil::check_element>(std::move(effect)));
                 settings->add(std::move(effect_row), widget_setting_row);
                 luil::choice_group_config level { .owner = u8"widget-opacity-choice", .style = luil::choice_style::toggle, .name = u8"진하기" };
-                for (const int percent : { 20, 35, 50, 70 })
+                for (const int percent : { 20, 35, 50, 70, 100 })
                     level.items.push_back({ u8"opacity-" + u8(std::to_string(percent)), u8(std::to_string(percent)) + u8"%" });
                 level.selected = u8"opacity-" + u8(std::to_string(static_cast<int>(std::lround(opacity_ * 100.0f))));
                 level.select
@@ -1381,13 +1383,11 @@ namespace session_board {
                 level_row->add_flexible(std::make_unique<luil::choice_group_element>(std::move(level)));
                 settings->add(std::move(level_row), widget_setting_row);
                 constexpr float settings_height { 12.0f + 2.0f * widget_setting_row + 4.0f };
-                content->add(panel(u8"widget-settings-surface", std::move(settings)), settings_height);
+                region->add(panel(u8"widget-settings-surface", std::move(settings)), settings_height);
                 used += settings_height + widget_gap;
             }
 
-            // 목록 영역: 아주 옅은 바탕과 테로 영역만 보인다. 흐림·투명이면 그 뒤로 바탕 화면이 비친다.
-            const luil::stack_config region_config { .spacing = widget_gap, .padding = luil::edge_insets::all(widget_gap) };
-            auto region { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-region-body" }, region_config) };
+            // 목록 영역: 진하기만큼의 바탕만 깐다. 흐림·투명이면 그 뒤로 바탕 화면이 비친다.
             auto rows { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-rows" }, luil::stack_config { .spacing = widget_gap }) };
             float content_height { 0.0f };
             const auto add_block = [&](std::unique_ptr<luil::ui_element> block, const float block_height) {
@@ -1429,7 +1429,7 @@ namespace session_board {
                 add_block(panel(group_id + u8"-surface", std::move(group)), group_height + 2.0f);
             }
 
-            const float viewport_height { std::max(0.0f, height / scale - used - 2.0f * widget_gap - 2.0f - widget_footer_height - widget_gap) };
+            const float viewport_height { std::max(0.0f, height / scale - used) };
             if (content_height > viewport_height)
             {
                 luil::scroll_area_config config {};
@@ -1450,9 +1450,16 @@ namespace session_board {
                 region->add_flexible_gap();
             }
 
-            // 바닥: provider별 마지막 수신이다. 알릴 일·오류가 있으면 같은 자리에서 오류색으로 말한다.
+            luil::panel_config region_surface {};
+            region_surface.background = [alpha = opacity_](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.window_background, alpha); };
+            auto region_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-region" }, region_surface) };
+            region_panel->set_content(std::move(region));
+            content->add_flexible(std::move(region_panel));
+
+            // 바닥 줄: provider별 마지막 수신이다. 알릴 일·오류가 있으면 같은 자리에서 오류색으로 말한다.
+            // 오른쪽 끝은 크기 조절 표시 자리로 비운다.
             const luil::stack_config footer_config {
-                .direction = luil::stack_direction::row, .spacing = 12.0f, .padding = { 10.0f, 0.0f, 10.0f, 0.0f }, .cross_alignment = luil::stack_alignment::center
+                .direction = luil::stack_direction::row, .spacing = 12.0f, .padding = { 12.0f, 0.0f, 18.0f, 0.0f }, .cross_alignment = luil::stack_alignment::center
             };
             auto footer { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-footer-body" }, footer_config) };
             if (!notice_.empty() || !error_.empty() || data_.invalid_files > 0)
@@ -1468,16 +1475,12 @@ namespace session_board {
                 if (split != std::u8string::npos)
                     footer->add_flexible(label(u8"widget-signal-claude", signal.substr(split + 1), 11.0f, luil::label_color_role::dim));
             }
-            region->add(panel(u8"widget-footer", std::move(footer)), widget_footer_height);
-
-            luil::panel_config region_surface {};
-            const float alpha { backdrop_ == widget_backdrop::opaque ? 1.0f : opacity_ };
-            region_surface.background = [alpha](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.window_background, alpha); };
-            region_surface.corner_radius = 10.0f;
-            region_surface.border = [](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.primary_foreground, 0.15f); };
-            auto region_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-region" }, region_surface) };
-            region_panel->set_content(std::move(region));
-            content->add_flexible(std::move(region_panel));
+            luil::panel_config footer_surface {};
+            footer_surface.background = [](const luil::ui_color_palette& palette) { return palette.surface_background; };
+            auto footer_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-footer" }, footer_surface) };
+            footer_panel->set_content(std::move(footer));
+            content->add(divider(u8"widget-footer-rule"), 1.0f);
+            content->add(std::move(footer_panel), widget_footer_height);
         }
         content->arrange({ { 0.0f, 0.0f, width, height }, scale });
         if (scroll_metrics != nullptr)
@@ -1535,10 +1538,75 @@ namespace session_board {
         return closed_.load();
     }
 
+    std::optional<luil::win32::window_placement> load_widget_placement(const std::filesystem::path& file)
+    {
+        try
+        {
+            std::ifstream input { file, std::ios::binary };
+            if (!input)
+                return std::nullopt;
+            const auto value { nlohmann::json::parse(input) };
+            luil::win32::window_placement placement {};
+            placement.x = value.at("x").get<int>();
+            placement.y = value.at("y").get<int>();
+            placement.width = value.at("width").get<int>();
+            placement.height = value.at("height").get<int>();
+            if (!placement.valid() || !luil::win32::placement_in_screen_range(placement))
+                return std::nullopt;
+            return placement;
+        }
+        catch (...)
+        {
+            return std::nullopt;
+        }
+    }
+
+    void save_widget_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept
+    {
+        try
+        {
+            const nlohmann::json value { { "x", placement.x }, { "y", placement.y }, { "width", placement.width }, { "height", placement.height } };
+            std::filesystem::create_directories(file.parent_path());
+            // 쓰다 끊겨도 옛 파일이 남도록 임시 파일을 다 쓴 뒤 바꿔 끼운다.
+            const std::filesystem::path temporary { file.wstring() + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp" };
+            {
+                std::ofstream output { temporary, std::ios::binary | std::ios::trunc };
+                output << value.dump();
+                if (!output)
+                    return;
+            }
+            MoveFileExW(temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+        }
+        catch (...)
+        {}
+    }
+
+    board_delegate::board_delegate(std::filesystem::path placement_file, const bool restored, single_instance* instance)
+        : placement_file_ { std::move(placement_file) }
+        , restored_ { restored }
+        , instance_ { instance }
+    {}
+
     void board_delegate::on_started(luil::app_host& host)
     {
-        if (!window_.attach())
+        if (!window_.attach(restored_))
+        {
             host.post_app_message(luil::app_message { widget_failed_intent {} });
+            return;
+        }
+        if (instance_ != nullptr)
+            instance_->bind_window(window_.handle());
+    }
+
+    luil::app_message board_delegate::make_window_placement_message(const luil::win32::window_placement& placement)
+    {
+        if (placement_file_.empty() || placement.maximized || placement.fullscreen)
+            return {};
+        auto saved { placement };
+        if (window_.collapsed())
+            saved.height = window_.expanded_height();
+        save_widget_placement(placement_file_, saved);
+        return {};
     }
 
     void board_delegate::execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command)
@@ -1551,14 +1619,10 @@ namespace session_board {
                 window_.toggle_pin();
             host.post_app_message(luil::app_message { widget_state_intent { window_.collapsed(), window_.pinned() } });
         }
-        else if (command.command == backdrop_blur_command || command.command == backdrop_transparent_command || command.command == backdrop_opaque_command)
+        else if (command.command == backdrop_blur_command || command.command == backdrop_transparent_command)
         {
             // DWM 합성은 창을 가진 UI thread에서 바꾸고, 그릴 바탕의 진하기는 앱 상태로 알린다.
-            auto backdrop { widget_backdrop::opaque };
-            if (command.command == backdrop_blur_command)
-                backdrop = widget_backdrop::blur;
-            else if (command.command == backdrop_transparent_command)
-                backdrop = widget_backdrop::transparent;
+            const auto backdrop { command.command == backdrop_blur_command ? widget_backdrop::blur : widget_backdrop::transparent };
             window_.set_backdrop(backdrop);
             host.post_app_message(luil::app_message { backdrop_intent { backdrop } });
         }

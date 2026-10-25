@@ -159,13 +159,17 @@ try {
     $null = Step "Wait-LuilElement -id 'theme' -name '밝게' -all_surfaces"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'detail-dark.png')' -surface (Get-LuilSurfaces | Where-Object { `$_.Current.Name -like '*상세*' })"
 
-    # 위젯의 배경 효과와 진하기를 고르고 설정 줄을 다시 접는다.
+    # 위젯의 흐림을 끄고 진하기를 고른 뒤 설정 줄을 다시 접는다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-transparent')"
+    $null = Step "Set-LuilToggle -on `$false (Wait-LuilElement -id 'widget-blur')"
+    $blur = Step "(Get-LuilState (Wait-LuilElement -id 'widget-blur')).toggle"
+    if ("$blur" -notmatch 'Off') {
+        throw 'The blur switch did not turn off.'
+    }
     $null = Step "Select-LuilItem (Wait-LuilElement -id 'opacity-50')"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-settings.png')'"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
-    $null = Step "Wait-LuilElement -id 'backdrop-transparent' -absent"
+    $null = Step "Wait-LuilElement -id 'widget-blur' -absent"
 
     $null = Step "Wait-LuilElement -id 'compact-$codex_owner' -search 'Codex.*응답 완료.*UI 실시간 갱신'"
     Send-Codex 'SessionEnd'

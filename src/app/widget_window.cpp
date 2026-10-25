@@ -40,7 +40,7 @@ namespace session_board {
             RemoveWindowSubclass(window_, subclass, subclass_id);
     }
 
-    bool widget_window::attach()
+    bool widget_window::attach(const bool keep_size)
     {
         EnumThreadWindows(GetCurrentThreadId(), find_main_window, reinterpret_cast<LPARAM>(&window_));
         if (window_ == nullptr)
@@ -54,7 +54,9 @@ namespace session_board {
         const DWM_WINDOW_CORNER_PREFERENCE corner { DWMWCP_ROUND };
         DwmSetWindowAttribute(window_, DWMWA_WINDOW_CORNER_PREFERENCE, &corner, sizeof(corner));
         const UINT dpi { GetDpiForWindow(window_) };
-        SetWindowPos(window_, HWND_TOPMOST, 0, 0, MulDiv(widget_width, static_cast<int>(dpi), 96), MulDiv(widget_height, static_cast<int>(dpi), 96), SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED);
+        const UINT size_flag { keep_size ? static_cast<UINT>(SWP_NOSIZE) : 0u };
+        SetWindowPos(
+            window_, HWND_TOPMOST, 0, 0, MulDiv(widget_width, static_cast<int>(dpi), 96), MulDiv(widget_height, static_cast<int>(dpi), 96), SWP_NOMOVE | SWP_NOACTIVATE | SWP_FRAMECHANGED | size_flag);
         apply_composition();
         return true;
     }
@@ -94,7 +96,7 @@ namespace session_board {
         if (!collapsed_)
             expanded_height_ = box.bottom - box.top;
         collapsed_ = !collapsed_;
-        const int height { collapsed_ ? MulDiv(widget_caption_height + 2 * widget_padding, static_cast<int>(GetDpiForWindow(window_)), 96) : expanded_height_ };
+        const int height { collapsed_ ? MulDiv(widget_caption_height, static_cast<int>(GetDpiForWindow(window_)), 96) : expanded_height_ };
         SetWindowPos(window_, nullptr, 0, 0, box.right - box.left, height, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
     }
 
@@ -104,9 +106,19 @@ namespace session_board {
         SetWindowPos(window_, pinned_ ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
     }
 
+    HWND widget_window::handle() const noexcept
+    {
+        return window_;
+    }
+
     bool widget_window::collapsed() const noexcept
     {
         return collapsed_;
+    }
+
+    int widget_window::expanded_height() const noexcept
+    {
+        return expanded_height_;
     }
 
     bool widget_window::pinned() const noexcept
@@ -131,13 +143,15 @@ namespace session_board {
         const int dpi { static_cast<int>(GetDpiForWindow(window)) };
         if (message == WM_NCCALCSIZE)
             return 0;
+        // DWM은 비활성 창의 Acrylic을 단색 판으로 바꾼다. 위젯은 대개 비활성이므로 늘 활성으로 알린다.
+        // lParam -1은 비클라이언트 영역을 다시 그리지 않게 한다.
         if (message == WM_NCACTIVATE)
-            return TRUE;
+            return DefWindowProcW(window, message, TRUE, -1);
         if (message == WM_GETMINMAXINFO)
         {
             const LRESULT result { DefSubclassProc(window, message, word, data) };
             auto* const limits { reinterpret_cast<MINMAXINFO*>(data) };
-            const int minimum_height { state->collapsed_ ? widget_caption_height + 2 * widget_padding : widget_minimum_height };
+            const int minimum_height { state->collapsed_ ? widget_caption_height : widget_minimum_height };
             limits->ptMinTrackSize = { MulDiv(widget_minimum_width, dpi, 96), MulDiv(minimum_height, dpi, 96) };
             return result;
         }
@@ -171,9 +185,7 @@ namespace session_board {
                 return HTTOP;
             if (bottom)
                 return HTBOTTOM;
-            const int inset { MulDiv(widget_padding, dpi, 96) };
-            if (point.y >= inset && point.y < MulDiv(widget_padding + widget_caption_height, dpi, 96) && point.x >= inset
-                && point.x < client.right - MulDiv(widget_padding + widget_control_width, dpi, 96))
+            if (point.y < MulDiv(widget_caption_height, dpi, 96) && point.x < client.right - MulDiv(widget_control_width, dpi, 96))
                 return HTCAPTION;
             return HTCLIENT;
         }

@@ -11,23 +11,21 @@ namespace session_board {
     inline constexpr std::uint32_t toggle_pin_command { 3 };
     inline constexpr std::uint32_t backdrop_blur_command { 4 };
     inline constexpr std::uint32_t backdrop_transparent_command { 5 };
-    inline constexpr std::uint32_t backdrop_opaque_command { 6 };
     inline constexpr int widget_width { 400 };
     inline constexpr int widget_height { 560 };
-    inline constexpr int widget_padding { 8 };
-    inline constexpr int widget_caption_height { 36 };
+    // 머릿줄은 창 너비 전체를 덮는다. 접은 위젯은 이 높이만 남는다.
+    inline constexpr int widget_caption_height { 40 };
     // 머릿줄 오른쪽 단추 줄의 폭이다. 이 자리는 끌기가 아니라 단추로 답한다.
-    inline constexpr int widget_control_width { 164 };
+    inline constexpr int widget_control_width { 172 };
 
     // 목록 영역 뒤를 어떻게 보일지다. 앱 그림의 투명도는 그대로 두고 DWM이 뒤를 합성하는 방식만 바꾼다.
+    // 비치지 않게 하려면 진하기를 100%로 둔다.
     enum class widget_backdrop
     {
         // 뒤를 흐린다 (Windows 11 Acrylic).
         blur,
         // 뒤가 그대로 비친다.
         transparent,
-        // 비치지 않는다.
-        opaque,
     };
 
     // 주 창을 위젯으로 쓴다: 테두리·작업 표시줄 없이 항상 위에 뜨고, 그림의 투명도대로 뒤가 비친다.
@@ -39,11 +37,15 @@ namespace session_board {
         ~widget_window();
         widget_window(const widget_window&) = delete;
         widget_window& operator=(const widget_window&) = delete;
-        [[nodiscard]] bool attach();
+        // 저장한 배치로 연 창이면 `keep_size`를 켠다. luil이 이미 그 크기로 세웠다.
+        [[nodiscard]] bool attach(bool keep_size);
         void set_backdrop(widget_backdrop backdrop);
         void toggle_collapse();
         void toggle_pin();
+        [[nodiscard]] HWND handle() const noexcept;
         [[nodiscard]] bool collapsed() const noexcept;
+        // 접기 전 높이(물리 픽셀)다. 접힌 채 닫아도 다음 실행은 펼친 크기로 연다.
+        [[nodiscard]] int expanded_height() const noexcept;
         [[nodiscard]] bool pinned() const noexcept;
         [[nodiscard]] widget_backdrop backdrop() const noexcept;
 

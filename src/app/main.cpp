@@ -64,6 +64,16 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
                 else if (argument.starts_with(u8"--position="))
                     config.initial_position = luil::win32::parse_window_position(std::u8string_view { argument }.substr(11));
             }
+        // 같은 구성·같은 데이터 폴더의 위젯이 떠 있으면 그 창을 앞으로 부르고 끝낸다. Hook 등록보다 먼저 본다.
+        session_board::single_instance instance { directory };
+        if (!instance.acquire())
+            return 0;
+        // 테스트 데이터로 연 실행은 사용자의 위젯 자리를 바꾸지 않는다. `--position`을 주면 저장한 자리보다 앞선다.
+        std::filesystem::path placement_file {};
+        if (!custom_data)
+            placement_file = directory.parent_path() / (L"widget-" + std::wstring { session_board::build_flavor() } + L".json");
+        if (!placement_file.empty() && !config.initial_position.has_value())
+            config.initial_placement = session_board::load_widget_placement(placement_file);
         std::optional<session_board::codex_hook_result> codex_hook_result {};
         if (codex_hooks && discovery && !custom_data && !custom_codex && !codex_directory.empty())
             try
@@ -90,7 +100,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         if (!claude_discovery || (custom_data && !custom_claude))
             claude_directory.clear();
         session_board::board_driver driver { std::move(directory), open_detail, std::move(codex_directory), std::move(claude_directory), std::move(hook_result), std::move(codex_hook_result) };
-        session_board::board_delegate delegate {};
+        session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance };
         session_board::board_policy policy {};
         luil::win32::window_environment environment {};
         environment.driver = &driver;

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "app/single_instance.h"
 #include "app/widget_window.h"
 #include "core/claude_hooks.h"
 #include "core/claude_monitor.h"
@@ -89,6 +90,11 @@ namespace session_board {
         std::u8string key {};
     };
 
+    // 위젯의 마지막 자리와 크기다. 값이 없거나 깨졌으면 빈 값이라 기본 자리로 연다.
+    [[nodiscard]] std::optional<luil::win32::window_placement> load_widget_placement(const std::filesystem::path& file);
+    // 실패해도 위젯 동작을 막지 않는다. 다음 이동 때 다시 쓴다.
+    void save_widget_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept;
+
     [[nodiscard]] luil::caption_config board_caption();
     // 상세 창의 caption이다. 보조 창의 비클라이언트 판정과 tree의 caption이 같은 값을 쓴다.
     [[nodiscard]] luil::caption_config detail_caption(bool dark);
@@ -157,12 +163,19 @@ namespace session_board {
     class board_delegate final : public luil::win32::window_delegate
     {
     public:
+        // `placement_file`이 비어 있으면 자리를 저장하지 않는다 (테스트 데이터로 연 실행).
+        // `restored`는 저장한 자리로 연 실행이다.
+        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance);
         void on_started(luil::app_host& host) override;
         void execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command) override;
         [[nodiscard]] luil::app_message make_window_metrics_message(float width, float height, float scale) override;
+        [[nodiscard]] luil::app_message make_window_placement_message(const luil::win32::window_placement& placement) override;
 
     private:
         widget_window window_ {};
+        std::filesystem::path placement_file_ {};
+        bool restored_ { false };
+        single_instance* instance_ { nullptr };
     };
 
     class board_policy final : public luil::interaction_policy
