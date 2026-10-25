@@ -28,7 +28,7 @@ function Invoke-Hook([string]$payload, [bool]$strict_mode = $true) {
     $info.RedirectStandardOutput = $true
     $info.RedirectStandardError = $true
     $info.StandardInputEncoding = [Text.UTF8Encoding]::new($false)
-    foreach ($argument in @('--provider', 'codex', '--data-dir', $data_directory)) {
+    foreach ($argument in @('--hook', '--provider', 'codex', '--data-dir', $data_directory)) {
         $info.ArgumentList.Add($argument)
     }
     if ($strict_mode) {
@@ -89,7 +89,7 @@ Assert-Condition $installed.unrelated.preserved 'Installer removed unrelated con
 Assert-Condition ($installed.description -eq 'preserve this') 'Installer changed the description.'
 Assert-Condition ($installed.hooks.PostToolUse[0].hooks[0].type -eq 'mcp_tool') 'Installer removed an MCP hook.'
 foreach ($event_name in $events) {
-    $ours = @($installed.hooks[$event_name] | ForEach-Object { $_.hooks } | Where-Object { $_.Contains('command') -and $_.command -match 'session-board-hook' })
+    $ours = @($installed.hooks[$event_name] | ForEach-Object { $_.hooks } | Where-Object { $_.Contains('command') -and $_.command -match 'session-board.exe"? --hook --provider codex$' })
     Assert-Condition ($ours.Count -eq 1) "Installer duplicated $event_name"
 }
 $windows_command = $installed.hooks.SessionStart[-1].hooks[0].commandWindows

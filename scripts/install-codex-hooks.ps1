@@ -1,7 +1,7 @@
 #requires -Version 7.2
 [CmdletBinding()]
 param(
-    [string]$Executable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board-hook.exe'),
+    [string]$Executable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board.exe'),
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA 'SessionBoard/bin'),
     [string]$HooksFile,
     [switch]$Preview,
@@ -16,7 +16,7 @@ if (-not $HooksFile) {
 }
 $HooksFile = [IO.Path]::GetFullPath($HooksFile)
 $InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
-$installed_executable = Join-Path $InstallDirectory 'session-board-hook.exe'
+$installed_executable = Join-Path $InstallDirectory 'session-board.exe'
 $opt_out = Join-Path (Split-Path -Parent $InstallDirectory) 'codex-hooks.disabled'
 $document = if (Test-Path -LiteralPath $HooksFile) { Get-Content -LiteralPath $HooksFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable } else { @{} }
 if (-not $document.Contains('hooks')) {
@@ -27,7 +27,7 @@ foreach ($event_name in $events) {
     $groups = [Collections.Generic.List[object]]::new()
     if ($document.hooks.Contains($event_name)) {
         foreach ($group in @($document.hooks[$event_name])) {
-            $handlers = @($group.hooks | Where-Object { -not ($_.Contains('command') -and $_.command -match 'session-board-hook\.exe"?\s+--provider codex$') })
+            $handlers = @($group.hooks | Where-Object { -not ($_.Contains('command') -and $_.command -match 'session-board(-hook)?\.exe"?\s+(--hook\s+)?--provider codex$') })
             if ($handlers.Count -gt 0) {
                 $group.hooks = $handlers
                 $groups.Add($group)
@@ -35,8 +35,8 @@ foreach ($event_name in $events) {
         }
     }
     if (-not $Remove) {
-        $command = '"' + $installed_executable.Replace('\', '/') + '" --provider codex'
-        $command_windows = "& '" + $installed_executable.Replace('\', '/').Replace("'", "''") + "' --provider codex"
+        $command = '"' + $installed_executable.Replace('\', '/') + '" --hook --provider codex'
+        $command_windows = "& '" + $installed_executable.Replace('\', '/').Replace("'", "''") + "' --hook --provider codex"
         $groups.Add(@{ hooks = @(@{ type = 'command'; command = $command; commandWindows = $command_windows; timeout = 2 }) })
     }
     if ($groups.Count -gt 0) {

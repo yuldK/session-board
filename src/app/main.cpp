@@ -1,10 +1,17 @@
 #include "app/board_app.h"
 #include "app/resource.h"
+#include "core/hook_command.h"
 
 #include <windows.h>
 
+#include <iostream>
+
 int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
 {
+    // Hook으로 불리면 창을 만들지 않고 이벤트 하나만 저장한다. 도구 호출마다 불리므로 단일 실행·DPI·COM 준비보다 먼저 가른다.
+    //  - 창이 없는 실행 파일이어도 부모가 넘긴 표준 입출력 핸들로 읽고 쓴다.
+    if (const auto arguments { luil::win32::command_line_arguments() }; arguments.has_value() && arguments->size() > 1 && (*arguments)[1] == session_board::hook_argument)
+        return session_board::run_hook_command({ arguments->begin() + 2, arguments->end() }, std::cin, std::cout, std::cerr);
     try
     {
         luil::win32::enable_per_monitor_dpi_awareness();
@@ -78,7 +85,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         if (codex_hooks && discovery && !custom_data && !custom_codex && !codex_directory.empty())
             try
             {
-                codex_hook_result = session_board::ensure_codex_hooks(codex_directory / L"hooks.json", session_board::bundled_hook_executable(), session_board::default_hook_install_directory());
+                codex_hook_result = session_board::ensure_codex_hooks(codex_directory / L"hooks.json", session_board::app_executable(), session_board::default_hook_install_directory());
             }
             catch (...)
             {
@@ -91,7 +98,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         if (claude_hooks && claude_discovery && !custom_data && !custom_claude && !claude_directory.empty())
             try
             {
-                hook_result = session_board::ensure_claude_hooks(claude_directory / L"settings.json", session_board::bundled_hook_executable(), session_board::default_hook_install_directory());
+                hook_result = session_board::ensure_claude_hooks(claude_directory / L"settings.json", session_board::app_executable(), session_board::default_hook_install_directory());
             }
             catch (...)
             {

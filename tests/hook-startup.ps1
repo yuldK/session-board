@@ -34,8 +34,8 @@ try {
             $claude_text = Get-Content -LiteralPath $claude_settings -Raw
             $codex = $codex_text | ConvertFrom-Json -AsHashtable
             $claude = $claude_text | ConvertFrom-Json -AsHashtable
-            $codex_count = @($codex.hooks.Values | ForEach-Object { $_ } | ForEach-Object { $_.hooks } | Where-Object { $_.command -match 'session-board-hook.+--provider codex$' }).Count
-            $claude_count = @($claude.hooks.Values | ForEach-Object { $_ } | ForEach-Object { $_.hooks } | Where-Object { $_.command -match 'session-board-hook.+--provider claude$' }).Count
+            $codex_count = @($codex.hooks.Values | ForEach-Object { $_ } | ForEach-Object { $_.hooks } | Where-Object { $_.command -match 'session-board.exe.+--hook --provider codex$' }).Count
+            $claude_count = @($claude.hooks.Values | ForEach-Object { $_ } | ForEach-Object { $_.hooks } | Where-Object { $_.command -match 'session-board.exe.+--hook --provider claude$' }).Count
             if ($codex_count -ne 8 -or $claude_count -ne 10) { throw "Incorrect automatic registration: Codex $codex_count, Claude $claude_count" }
             if (-not $claude.extra.preserve -or $claude.permissions.deny[0] -ne 'Bash(git push)' -or $claude.hooks.PreToolUse[0].hooks[0].command -ne 'echo existing') {
                 throw 'Automatic registration changed unrelated Claude settings.'

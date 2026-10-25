@@ -2,7 +2,7 @@
 [CmdletBinding()]
 param(
     [string]$DataDirectory = (Join-Path $PSScriptRoot '../build/demo-sessions'),
-    [string]$Executable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board-hook.exe')
+    [string]$Executable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board.exe')
 )
 
 Set-StrictMode -Version Latest
@@ -22,7 +22,7 @@ foreach ($example in $examples) {
     if (-not $example.Contains('timestamp_ms')) {
         $example.timestamp_ms = $now_ms
     }
-    $example | ConvertTo-Json -Compress | & $Executable --normalized --strict --data-dir $DataDirectory
+    $example | ConvertTo-Json -Compress | & $Executable --hook --normalized --strict --data-dir $DataDirectory
     if ($LASTEXITCODE -ne 0) {
         throw 'Demo event failed.'
     }

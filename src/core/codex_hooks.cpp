@@ -16,8 +16,7 @@ namespace session_board {
             const auto found { handler.find("command") };
             if (found == handler.end() || !found->is_string())
                 return false;
-            const auto& command { found->get_ref<const std::string&>() };
-            return command.find("session-board-hook.exe") != std::string::npos && command.ends_with("--provider codex");
+            return owned_hook_command(found->get_ref<const std::string&>(), "codex");
         }
 
         std::size_t owned_count(const nlohmann::ordered_json& group)
@@ -51,8 +50,8 @@ namespace session_board {
         // install-codex-hooks.ps1와 같은 정의를 사용해 이미 신뢰한 Hook의 hash를 유지한다.
         nlohmann::ordered_json handler = nlohmann::ordered_json::object();
         handler["type"] = "command";
-        handler["command"] = "\"" + path + "\" --provider codex";
-        handler["commandWindows"] = "& '" + escaped + "' --provider codex";
+        handler["command"] = "\"" + path + "\" --hook --provider codex";
+        handler["commandWindows"] = "& '" + escaped + "' --hook --provider codex";
         handler["timeout"] = 2;
         const nlohmann::ordered_json desired { { "hooks", nlohmann::ordered_json::array({ handler }) } };
         bool changed { false };

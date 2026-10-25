@@ -1,6 +1,6 @@
 # Session Board 이벤트 규격 v1
 
-수집 경로: AI lifecycle hook → `session-board-hook.exe` → 세션별 원자적 JSON 스냅숏 → luil 앱.
+수집 경로: AI lifecycle hook → `session-board.exe --hook` → 세션별 원자적 JSON 스냅숏 → luil 앱.
 
 Codex 보완 경로: 기존 로컬 세션의 JSONL 기록·작성 잠금 → C++ 백그라운드 수집기 → 동일 ID의 Hook 스냅숏과 메모리에서 병합 → luil 앱.
 Codex 원본 파일과 잠금 파일의 내용은 수정하지 않는다. 별도의 AI 요청이나 검증 세션을 생성하지 않는다.
@@ -11,15 +11,15 @@ Claude 원본 Hook은 `--provider claude`로 전달한다. Claude의 `prompt_id`
 UI가 꺼져 있어도 Hook 실행 파일은 마지막 상태를 저장한다. 서버, API 키, OpenAI/Anthropic API 호출은 필요 없다.
 이 규격은 로컬 Windows 환경을 대상으로 한다. WSL·원격 호스트·클라우드 세션은 별도 전달 어댑터가 필요하다.
 
-일반 앱 시작 시 Claude `settings.json`과 Codex `hooks.json`에 provider별 Hook을 자동 등록한다. 공용 helper를 먼저 설치하고 기존 설정·다른 Hook을 보존하며, 변경 전 백업과 동시 수정 감지를 적용한다. 같은 정의는 다시 쓰지 않는다. 등록 실패는 하단에 표시하고 로컬 관측을 계속한다.
+일반 앱 시작 시 Claude `settings.json`과 Codex `hooks.json`에 provider별 Hook을 자동 등록한다. 앱 자신을 공용 위치(`%LOCALAPPDATA%/SessionBoard/bin`)에 먼저 복사하고 기존 설정·다른 Hook을 보존하며, 변경 전 백업과 동시 수정 감지를 적용한다. 같은 정의는 다시 쓰지 않는다. 등록 실패는 하단에 표시하고 로컬 관측을 계속한다.
 Codex는 최초 등록·정의 변경 후 `/hooks`에서 사용자 신뢰 검토가 필요하다. 자동 등록은 신뢰 승인을 대신하지 않는다. `--data-dir`·provider별 custom home은 실제 설정을 바꾸지 않는 격리 실행이다.
 
 ## 전달
 
-UTF-8 JSON 객체 하나를 stdin으로 전달하고 stdin을 닫는다. stdout의 `{}`는 AI에게 문맥을 추가하거나 작업을 중단하지 않는 응답이다.
+앱 실행 파일의 첫 인자를 `--hook`으로 주고 UTF-8 JSON 객체 하나를 stdin으로 전달한 뒤 stdin을 닫는다. 이 실행은 창을 만들지 않고 이벤트 하나만 저장한 뒤 끝난다. stdout의 `{}`는 AI에게 문맥을 추가하거나 작업을 중단하지 않는 응답이다.
 
 ```powershell
-$event | ConvertTo-Json -Compress | & './session-board-hook.exe' --normalized
+$event | ConvertTo-Json -Compress | & './session-board.exe' --hook --normalized
 ```
 
 - 기본 저장 위치: `%LOCALAPPDATA%/SessionBoard/sessions`.
@@ -76,7 +76,7 @@ $event | ConvertTo-Json -Compress | & './session-board-hook.exe' --normalized
 `child_id`가 있으면 `title`은 하위의 짧은 설명(모델이 쓴 작업 이름), `summary`는 하위의 현재 동작이다. 하위에게 준 지시문은 싣지 않는다.
 
 `host_window`·`host_process_id`는 "세션 창으로 이동" 단추를 위한 선택 필드다.
-`session-board-hook.exe`는 이 값이 없으면 스스로 찾는다: 콘솔에 붙어 있으면 그 콘솔을 그리는 창(Windows Terminal은
+`session-board.exe --hook`은 이 값이 없으면 스스로 찾는다: 콘솔에 붙어 있으면 그 콘솔을 그리는 창(Windows Terminal은
 의사 콘솔 창의 소유자)을, 아니면 부모 프로세스를 거슬러 올라가며 보이는 최상위 창을 쓴다. 한 프로세스에 창이 여럿이면
 제목에 작업 폴더 이름이 든 창을 고른다. 찾지 못해도 이벤트는 그대로 저장한다.
 이 값을 담지 않은 이벤트는 저장된 창 정보를 지우지 않는다. 로컬 기록 수집기의 병합도 Hook이 남긴 창 정보를 유지한다.
@@ -132,6 +132,6 @@ Windows Terminal의 탭이나 데스크톱 앱 안의 특정 대화까지는 고
 - Hooks만 사용하면 설치 전에 시작한 세션은 이후 이벤트가 있어야 나타난다. 기본 Codex 로컬 수집기는 이미 열린 세션과 최근 48시간 내 기록 중 최대 64개를 자동 탐색한다. 전체 과거 대화를 가져오지는 않는다.
 - 정확한 완료율·남은 시간·모든 종류의 사용자 대기를 제공하지 않는다.
 - 잘못된 파일은 건너뛰고 UI에 개수를 표시한다. 다른 정상 세션은 계속 보인다.
-- 저장 스냅숏은 내부 구현이다. 어댑터는 파일을 직접 쓰지 말고 native helper에 정규화 이벤트를 보낸다.
+- 저장 스냅숏은 내부 구현이다. 어댑터는 파일을 직접 쓰지 말고 `session-board.exe --hook --normalized`에 정규화 이벤트를 보낸다.
 
 Codex 원본 입력은 `--provider codex`로 전달한다. 설정 위치와 신뢰 절차는 [공식 Hooks 문서](https://learn.chatgpt.com/docs/hooks)를 따른다.

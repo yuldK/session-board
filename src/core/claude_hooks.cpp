@@ -39,8 +39,7 @@ namespace session_board {
         {
             if (!handler.is_object() || !handler.contains("command") || !handler["command"].is_string())
                 return false;
-            const auto& command { handler["command"].get_ref<const std::string&>() };
-            return command.find("session-board-hook.exe") != std::string::npos && command.ends_with("--provider claude");
+            return owned_hook_command(handler["command"].get_ref<const std::string&>(), "claude");
         }
 
         std::size_t owned_count(const nlohmann::ordered_json& group)
@@ -125,7 +124,7 @@ namespace session_board {
             return first.eof() && second.eof();
         }
 
-        // 실행 중인 helper는 교체할 수 없으므로 실패하면 기존 helper를 둔 채 다음 실행 때 다시 시도한다.
+        // Hook으로 실행 중인 사본은 교체할 수 없으므로 실패하면 기존 사본을 둔 채 다음 실행 때 다시 시도한다.
         bool install_helper(const std::filesystem::path& source, const std::filesystem::path& installed)
         {
             std::error_code error {};
@@ -199,13 +198,19 @@ namespace session_board {
         return result;
     }
 
-    std::filesystem::path bundled_hook_executable()
+    std::filesystem::path app_executable()
     {
         std::array<wchar_t, 32768> module {};
         const auto count { GetModuleFileNameW(nullptr, module.data(), static_cast<DWORD>(module.size())) };
         if (count == 0 || count >= module.size())
             return {};
-        return std::filesystem::path { module.data() }.parent_path() / L"session-board-hook.exe";
+        return std::filesystem::path { module.data() };
+    }
+
+    bool owned_hook_command(const std::string_view command, const std::string_view provider)
+    {
+        const bool ours { command.find("session-board.exe") != std::string_view::npos || command.find("session-board-hook.exe") != std::string_view::npos };
+        return ours && command.ends_with("--provider " + std::string { provider });
     }
 
     std::filesystem::path claude_hook_opt_out_file(const std::filesystem::path& install_directory)
@@ -223,7 +228,7 @@ namespace session_board {
         // 공백 없는 경로는 따옴표 없이 써서 Git Bash와 PowerShell 어느 Hook 셸에서도 그대로 실행되게 한다.
         const auto text { executable.generic_u8string() };
         const std::string path { text.begin(), text.end() };
-        return (path.find(' ') == std::string::npos ? path : "\"" + path + "\"") + " --provider claude";
+        return (path.find(' ') == std::string::npos ? path : "\"" + path + "\"") + " --hook --provider claude";
     }
 
     bool update_claude_hook_settings(nlohmann::ordered_json& document, const std::string& command, const bool remove)
@@ -310,20 +315,20 @@ namespace session_board {
                 return result;
             }
             const named_lock lock {};
-            const auto installed { install_directory / L"session-board-hook.exe" };
+            const auto installed { install_directory / hook_executable_name };
             try
             {
                 result.helper_updated = install_helper(helper_source, installed);
             }
             catch (...)
             {
-                result.error = "Session Board helper를 갱신하지 못했습니다. 다음 실행 때 다시 시도합니다.";
+                result.error = "Hook용 Session Board 사본을 갱신하지 못했습니다. 다음 실행 때 다시 시도합니다.";
                 return result;
             }
             // 없는 실행 파일을 등록하면 모든 도구 호출마다 Hook 오류가 남으므로 등록하지 않는다.
             if (!std::filesystem::exists(installed, error))
             {
-                result.error = "Session Board helper가 없어 " + name + " Hook을 등록하지 않았습니다.";
+                result.error = "Hook용 Session Board 사본이 없어 " + name + " Hook을 등록하지 않았습니다.";
                 return result;
             }
 

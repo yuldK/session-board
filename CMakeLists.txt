@@ -28,6 +28,7 @@ add_library(session_board_core STATIC src/core/session.cpp src/core/session.h sr
     src/core/claude_desktop.cpp src/core/claude_desktop.h
     src/core/claude_hooks.cpp src/core/claude_hooks.h
     src/core/codex_hooks.cpp src/core/codex_hooks.h src/core/hook_installation.h
+    src/core/hook_command.cpp src/core/hook_command.h
     src/core/host_window.cpp src/core/host_window.h)
 target_include_directories(session_board_core PUBLIC src)
 target_link_libraries(session_board_core PUBLIC session_board_options luil::nlohmann_json shell32 ole32)
@@ -45,13 +46,10 @@ set_target_properties(session_board PROPERTIES OUTPUT_NAME session-board)
 target_include_directories(session_board PRIVATE "${PROJECT_SOURCE_DIR}/assets")
 target_link_libraries(session_board PRIVATE session_board_core luil::luil comctl32 dwmapi)
 
-add_executable(session_board_hook src/hook/main.cpp)
-set_target_properties(session_board_hook PROPERTIES OUTPUT_NAME session-board-hook)
-target_link_libraries(session_board_hook PRIVATE session_board_core)
 configure_file(third_party/luil/third_party/nlohmann_json/LICENSE.MIT "${CMAKE_BINARY_DIR}/bin/json-LICENSE.txt" COPYONLY)
 
-# 앱이 Hook 등록 때 자기 옆의 helper와 라이선스를 복사하므로 셋을 같은 폴더에 둔다.
-install(TARGETS session_board session_board_hook RUNTIME DESTINATION .)
+# 앱이 Hook 등록 때 자신과 옆의 라이선스를 함께 복사하므로 둘을 같은 폴더에 둔다.
+install(TARGETS session_board RUNTIME DESTINATION .)
 install(FILES third_party/luil/third_party/nlohmann_json/LICENSE.MIT DESTINATION . RENAME json-LICENSE.txt)
 
 if(SESSION_BOARD_BUILD_TESTS)
@@ -69,7 +67,7 @@ if(SESSION_BOARD_BUILD_TESTS)
     if(SESSION_BOARD_POWERSHELL)
         add_test(NAME session_board_integration
             COMMAND "${SESSION_BOARD_POWERSHELL}" -NoProfile -File "${PROJECT_SOURCE_DIR}/tests/integration.ps1"
-                -Executable "$<TARGET_FILE:session_board_hook>"
+                -Executable "$<TARGET_FILE:session_board>"
                 -WorkDirectory "${CMAKE_BINARY_DIR}/integration-test")
     endif()
 endif()

@@ -3,7 +3,7 @@
 Claude Code 세션은 두 경로로 모아 `(provider, session_id)` 기준으로 한 카드에 병합한다.
 
 1. **로컬 관측**(기본): C++ 백그라운드 수집기 `claude_monitor`가 실행 중 세션 등록 정보와 transcript를 읽는다. 앱을 켜기 전부터 열려 있던 세션과 Hook 설치 전에 시작한 세션도 보인다.
-2. **Hook**(보완): `session-board-hook.exe --provider claude`가 lifecycle·승인·입력 대기를 공통 규격 이벤트로 저장한다.
+2. **Hook**(보완): `session-board.exe --hook --provider claude`가 lifecycle·승인·입력 대기를 공통 규격 이벤트로 저장한다.
 
 Claude 원본 기록과 등록 파일은 읽기만 한다. 별도 런타임·서버·AI API 호출은 없다.
 
@@ -110,8 +110,8 @@ Hook 실패 정책은 Codex와 같다. stdout `{}`, 종료 코드 0이며 decisi
 사용자가 스크립트를 실행하지 않아도 앱을 열면 Hook이 등록되도록 `ensure_claude_hooks`(`src/core/claude_hooks.*`)를 둔다. 앱은 시작할 때 이 함수를 한 번 호출한다.
 
 1. `%LOCALAPPDATA%/SessionBoard/claude-hooks.disabled`가 있으면 아무것도 하지 않는다. 사용자가 제거를 선택했다는 표시다.
-2. 앱 옆의 `session-board-hook.exe`를 `%LOCALAPPDATA%/SessionBoard/bin`으로 복사한다. 내용이 같으면 복사하지 않는다. Codex Hook도 같은 helper를 쓰며 앱의 helper는 두 provider를 모두 지원한다. 실행 중이라 교체하지 못하면 기존 helper·설정을 보존하고 다음 실행 때 다시 시도한다.
-3. helper가 없거나 갱신에 실패하면 새 설정을 등록하지 않는다. 없는 실행 파일이나 Claude 미지원의 오래된 helper를 등록해 매 도구 호출마다 오류가 나는 일을 막는다.
+2. 앱 자신(`session-board.exe`)을 `%LOCALAPPDATA%/SessionBoard/bin`으로 복사해 `--hook --provider claude` 인자로 등록한다. 내용이 같으면 복사하지 않는다. Codex Hook도 같은 복사본을 쓴다. Hook으로 실행 중이라 교체하지 못하면 기존 복사본·설정을 보존하고 다음 실행 때 다시 시도한다. 예전 `session-board-hook.exe` 등록은 Session Board 항목으로 보고 새 명령으로 바꿔 끼운다.
+3. 복사본이 없거나 갱신에 실패하면 새 설정을 등록하지 않는다. 없는 실행 파일이나 오래된 복사본을 등록해 매 도구 호출마다 오류가 나는 일을 막는다.
 4. `<설정 루트>/settings.json`을 순서 보존 JSON으로 읽어 Session Board 항목만 넣는다. 원하는 등록이 이미 하나씩 있으면 파일을 쓰지 않는다. 그래서 매번 실행해도 백업이 쌓이지 않는다.
 5. 바꿀 것이 있으면 `settings.json.session-board-<시각>.bak` 백업을 만들고 임시 파일로 교체한다. 들여쓰기 2칸, 원래 줄 끝(LF/CRLF)을 따른다.
 6. 해석할 수 없는 설정(주석·깨진 JSON 등)은 건드리지 않는다. 읽은 뒤 Claude Code나 사용자가 설정을 바꾸면 덮어쓰지 않고 다음 실행으로 미룬다. 앱 인스턴스끼리는 named mutex로 직렬화한다.

@@ -3,7 +3,7 @@
 param(
     [string]$UiaScript = (Join-Path $env:USERPROFILE '.codex/skills/luil-uia/scripts/uia.ps1'),
     [string]$Executable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board.exe'),
-    [string]$HookExecutable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board-hook.exe')
+    [string]$HookExecutable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board.exe')
 )
 
 Set-StrictMode -Version Latest
@@ -17,7 +17,8 @@ $app_path = (Resolve-Path -LiteralPath $Executable).Path
 # 사람 화면의 포커스·커서를 건드리지 않도록 앱을 따로 만든 데스크톱에 띄운다.
 # luil-uia의 격리 실행과 같되 실행 인자를 넘긴다 — 테스트 데이터 폴더를 써야 실제 설정과 Hook 등록을 건드리지 않는다.
 function Connect-SessionBoardIsolated([string]$arguments) {
-    if (Get-Process -Name 'session-board' -ErrorAction SilentlyContinue) {
+    # Hook도 같은 실행 파일이라 잠깐 떠 있는 `--hook` 실행은 위젯으로 치지 않는다.
+    if (Get-CimInstance Win32_Process -Filter "Name='session-board.exe'" | Where-Object { $_.CommandLine -notmatch '\s--hook(\s|$)' }) {
         throw 'Session Board is already running. Close it before the isolated UI test.'
     }
     $script:luil_desktop_name = 'luil-uia-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
@@ -56,13 +57,13 @@ function Step([string]$code) {
 
 function Send-Codex([string]$event_name, [string]$prompt = 'UI 실시간 갱신') {
     $payload = @{ hook_event_name = $event_name; session_id = 'uia-codex'; turn_id = 'uia-turn'; prompt = $prompt; tool_name = 'exec_command'; tool_use_id = 'uia-tool'; model = 'Codex'; cwd = $project_root }
-    $payload | ConvertTo-Json -Compress | & $HookExecutable --provider codex --strict --data-dir $data_directory | Out-Null
+    $payload | ConvertTo-Json -Compress | & $HookExecutable --hook --provider codex --strict --data-dir $data_directory | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw 'UI test hook failed.'
     }
     if ($event_name -eq 'UserPromptSubmit') {
         $work = @{schema_version=1;provider='codex';session_id='uia-codex';turn_id='uia-turn';event='turn_started';timestamp_ms=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds();summary=$prompt}
-        $work | ConvertTo-Json -Compress | & $HookExecutable --normalized --strict --data-dir $data_directory | Out-Null
+        $work | ConvertTo-Json -Compress | & $HookExecutable --hook --normalized --strict --data-dir $data_directory | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'UI work summary fixture failed.' }
     }
 }
@@ -70,7 +71,7 @@ function Send-Codex([string]$event_name, [string]$prompt = 'UI 실시간 갱신'
 function Send-Claude([string]$event_name, [string]$session_id = 'uia-claude') {
     $title = if ($session_id -eq 'uia-claude') { 'Claude 공통 규격' } else { "스크롤 세션 $session_id" }
     $payload = @{ schema_version = 1; provider = 'claude'; session_id = $session_id; event = $event_name; timestamp_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); title = $title; summary = $title; cwd = $project_root }
-    $payload | ConvertTo-Json -Compress | & $HookExecutable --normalized --strict --data-dir $data_directory | Out-Null
+    $payload | ConvertTo-Json -Compress | & $HookExecutable --hook --normalized --strict --data-dir $data_directory | Out-Null
     if ($LASTEXITCODE -ne 0) {
         throw 'UI test normalized hook failed.'
     }
@@ -86,7 +87,7 @@ public static class SessionBoardWindow {
     [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr word, IntPtr data);
 }
 "@ -ErrorAction SilentlyContinue
-$handle = Find-LuilMainWindow -process_id (Get-Process -Name 'session-board').Id
+$handle = Find-LuilMainWindow -process_id __APP_PROCESS_ID__
 $style = [SessionBoardWindow]::GetWindowLongPtrW($handle, -16).ToInt64()
 $extended = [SessionBoardWindow]::GetWindowLongPtrW($handle, -20).ToInt64()
 $hit = 0
@@ -100,7 +101,9 @@ if ($null -ne $grip) {
 '@
 
 function Assert-WidgetWindow([bool]$topmost = $true) {
-    $style, $extended, $hit = (Step $window_probe).Split(';') | ForEach-Object { [int64]$_ }
+    # 확인 코드는 격리 데스크톱의 작업자가 글로 받아 돌리므로 위젯 프로세스를 글에 넣어 보낸다.
+    # Hook도 같은 이름의 프로세스라 이름으로 찾지 않는다.
+    $style, $extended, $hit = (Step ($window_probe.Replace('__APP_PROCESS_ID__', [string]$script:luil_process.Id))).Split(';') | ForEach-Object { [int64]$_ }
     # 테두리 없음, 작업 표시줄 없음, 색상 키 대신 DWM 합성이다.
     if (($style -band 0x00c00000) -ne 0 -or ($extended -band 0x80) -eq 0 -or ($extended -band 0x00080000) -ne 0) {
         throw 'The widget must be a borderless tool window composed by DWM, not a color-keyed layered window.'

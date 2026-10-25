@@ -1,7 +1,7 @@
 #requires -Version 7.3
 [CmdletBinding()]
 param(
-    [string]$Executable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board-hook.exe'),
+    [string]$Executable = (Join-Path $PSScriptRoot '../build/vs2026/bin/Release/session-board.exe'),
     [string]$InstallDirectory = (Join-Path $env:LOCALAPPDATA 'SessionBoard/bin'),
     [string]$SettingsFile,
     [int]$Timeout = 5,
@@ -17,7 +17,7 @@ if (-not $SettingsFile) {
 }
 $SettingsFile = [IO.Path]::GetFullPath($SettingsFile)
 $InstallDirectory = [IO.Path]::GetFullPath($InstallDirectory)
-$installed_executable = Join-Path $InstallDirectory 'session-board-hook.exe'
+$installed_executable = Join-Path $InstallDirectory 'session-board.exe'
 # 앱(src/core/claude_hooks.cpp)도 시작할 때 같은 항목을 자동 등록한다. 이 스크립트는 Preview·수동 설치·제거용이다.
 # PowerShell 7.3 이상은 순서를 보존하므로 기존 설정 키의 순서와 알 수 없는 키를 그대로 둔다.
 $document = if (Test-Path -LiteralPath $SettingsFile) { Get-Content -LiteralPath $SettingsFile -Raw -Encoding utf8 | ConvertFrom-Json -AsHashtable } else { [ordered]@{} }
@@ -30,7 +30,7 @@ if (-not $document.Contains('hooks')) {
 
 # 공백 없는 경로는 따옴표 없이 써서 Git Bash와 PowerShell 어느 Hook 셸에서도 그대로 실행되게 한다.
 $executable_text = $installed_executable.Replace('\', '/')
-$command = if ($executable_text.Contains(' ')) { '"' + $executable_text + '" --provider claude' } else { $executable_text + ' --provider claude' }
+$command = if ($executable_text.Contains(' ')) { '"' + $executable_text + '" --hook --provider claude' } else { $executable_text + ' --hook --provider claude' }
 $events = [ordered]@{
     SessionStart       = $null
     UserPromptSubmit   = $null
@@ -47,7 +47,7 @@ foreach ($event_name in $events.Keys) {
     $groups = [Collections.Generic.List[object]]::new()
     if ($document.hooks.Contains($event_name)) {
         foreach ($group in @($document.hooks[$event_name])) {
-            $handlers = @($group.hooks | Where-Object { -not ($_.Contains('command') -and $_.command -match 'session-board-hook\.exe"?\s+--provider claude$') })
+            $handlers = @($group.hooks | Where-Object { -not ($_.Contains('command') -and $_.command -match 'session-board(-hook)?\.exe"?\s+(--hook\s+)?--provider claude$') })
             if ($handlers.Count -gt 0) {
                 $group.hooks = $handlers
                 $groups.Add($group)

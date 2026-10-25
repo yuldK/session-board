@@ -31,7 +31,7 @@ namespace session_board {
         {
             const auto home { directory / "codex" };
             const auto settings { home / "hooks.json" };
-            const auto source { directory / "bundled" / "session-board-hook.exe" };
+            const auto source { directory / "bundled" / "session-board.exe" };
             const auto install { directory / "Session Board's bin" };
             std::filesystem::create_directories(home);
             std::filesystem::create_directories(source.parent_path());
@@ -48,7 +48,7 @@ namespace session_board {
             for (const char* event : { "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PermissionRequest", "Stop", "Interrupt", "SessionEnd" })
             {
                 const auto& handler { document["hooks"][event].back()["hooks"][0] };
-                require(handler["timeout"] == 2 && handler["command"].get<std::string>().ends_with("--provider codex"), "Missing event or changed definition.");
+                require(handler["timeout"] == 2 && handler["command"].get<std::string>().ends_with("session-board.exe\" --hook --provider codex"), "Missing event or changed definition.");
                 require(handler["commandWindows"].get<std::string>().find("Board''s bin") != std::string::npos, "PowerShell path not escaped.");
             }
             const auto modified { std::filesystem::last_write_time(settings) };
@@ -64,8 +64,13 @@ namespace session_board {
             std::ofstream { settings, std::ios::binary } << different_order;
             require(!ensure_codex_hooks(settings, source, install).changed && read(settings) == different_order, "Key order caused hook review.");
             document["hooks"]["Stop"].push_back(document["hooks"]["Stop"][0]);
-            require(update_codex_hook_settings(document, install / "session-board-hook.exe") && document["hooks"]["Stop"].size() == 1, "Duplicate hooks not collapsed.");
-            require(update_codex_hook_settings(document, install / "session-board-hook.exe", true) && document == nlohmann::ordered_json::parse(original), "Removal lost other handlers.");
+            require(update_codex_hook_settings(document, install / "session-board.exe") && document["hooks"]["Stop"].size() == 1, "Duplicate hooks not collapsed.");
+            require(update_codex_hook_settings(document, install / "session-board.exe", true) && document == nlohmann::ordered_json::parse(original), "Removal lost other handlers.");
+            // 예전 helper 명령은 우리 항목으로 보고 새 명령으로 바꿔 끼운다.
+            auto legacy { nlohmann::ordered_json::parse(original) };
+            legacy["hooks"]["Stop"] = nlohmann::ordered_json::parse(R"([{"hooks":[{"type":"command","command":"\"C:/old/session-board-hook.exe\" --provider codex","timeout":2}]}])");
+            require(update_codex_hook_settings(legacy, install / "session-board.exe"), "Legacy helper not replaced.");
+            require(legacy["hooks"]["Stop"].size() == 1 && legacy["hooks"]["Stop"][0]["hooks"][0]["command"].get<std::string>().ends_with("--hook --provider codex"), "Legacy helper kept.");
             std::ofstream { hook_opt_out_file(install, "codex"), std::ios::binary } << "";
             require(ensure_codex_hooks(settings, source, install).disabled && read(settings) == different_order, "Explicit removal undone.");
             std::filesystem::remove(hook_opt_out_file(install, "codex"));
@@ -80,14 +85,14 @@ namespace session_board {
             require(claude.changed && !claude.helper_updated && claude.error.empty(), "Claude did not reuse shared helper.");
             require(!ensure_codex_hooks(fresh, source, install).changed, "Claude altered Codex definitions.");
             // 사용 중인 이전 helper를 교체하지 못하면 새 설정은 설치하지 않는다.
-            const HANDLE locked { CreateFileW((install / "session-board-hook.exe").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
+            const HANDLE locked { CreateFileW((install / "session-board.exe").c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
             require(locked != INVALID_HANDLE_VALUE, "Cannot lock installed fixture.");
             std::ofstream { source, std::ios::binary } << "helper-v2";
             const auto blocked { directory / "blocked" / "hooks.json" };
             const auto blocked_result { ensure_codex_hooks(blocked, source, install) };
             CloseHandle(locked);
             require(!blocked_result.changed && !blocked_result.error.empty() && !std::filesystem::exists(blocked), "Failed helper replacement installed unusable hooks.");
-            require(ensure_codex_hooks(blocked, source, install).changed && read(install / "session-board-hook.exe") == "helper-v2", "Deferred update failed.");
+            require(ensure_codex_hooks(blocked, source, install).changed && read(install / "session-board.exe") == "helper-v2", "Deferred update failed.");
         }
     } // namespace
 } // namespace session_board

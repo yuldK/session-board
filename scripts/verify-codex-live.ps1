@@ -122,7 +122,7 @@ function Send-Rpc([int]$rpc_id, [string]$method, [hashtable]$parameters) {
 
 function Get-OwnHooks($node) {
     if ($node -is [Collections.IDictionary]) {
-        if ($node.Contains('trustStatus') -and (($node | ConvertTo-Json -Depth 16 -Compress) -match 'session-board-hook')) {
+        if ($node.Contains('trustStatus') -and (($node | ConvertTo-Json -Depth 16 -Compress) -match 'session-board(-hook)?.exe')) {
             Write-Output $node
         }
         foreach ($value in $node.Values) {

@@ -409,7 +409,7 @@ namespace session_board {
         {
             const auto home { directory / "registration" / "claude" };
             const auto install { directory / "registration" / "SessionBoard" / "bin" };
-            const auto source { directory / "registration" / "build" / "session-board-hook.exe" };
+            const auto source { directory / "registration" / "build" / "session-board.exe" };
             const auto settings { home / "settings.json" };
             std::filesystem::create_directories(home);
             std::filesystem::create_directories(source.parent_path());
@@ -423,12 +423,16 @@ namespace session_board {
 
             auto result { ensure_claude_hooks(settings, source, install) };
             require(result.changed && result.helper_updated && result.error.empty() && std::filesystem::exists(result.backup), "Hooks not registered on first start.");
-            require(file_text(install / "session-board-hook.exe") == "helper-v1", "Helper not installed.");
+            require(file_text(install / "session-board.exe") == "helper-v1", "Helper not installed.");
             require(file_text(result.backup) == original, "Backup differs from original settings.");
             auto document { nlohmann::ordered_json::parse(file_text(settings)) };
             require(document.begin().key() == "permissions" && document.contains("알 수 없는 키") && document["permissions"]["deny"].size() == 1, "Existing settings not preserved.");
             require(document["hooks"]["PreToolUse"].size() == 2 && document["hooks"]["PreToolUse"][0]["hooks"][0]["command"] == "python guard.py", "Existing hook lost.");
-            const auto command { claude_hook_command(install / "session-board-hook.exe") };
+            const auto command { claude_hook_command(install / "session-board.exe") };
+            require(command.ends_with("session-board.exe --hook --provider claude"), "Hook command does not call the app in hook mode.");
+            // 예전 helper 명령은 우리 항목으로 보고 새 명령으로 바꿔 끼운다.
+            auto legacy { nlohmann::ordered_json::parse(R"({"hooks":{"Stop":[{"hooks":[{"type":"command","command":"C:/old/session-board-hook.exe --provider claude"}]}]}})") };
+            require(update_claude_hook_settings(legacy, command) && legacy["hooks"]["Stop"].size() == 1 && legacy["hooks"]["Stop"][0]["hooks"][0]["command"] == command, "Legacy helper not replaced.");
             for (const char* event :
                 { "SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PermissionRequest", "Notification", "Stop", "StopFailure", "SessionEnd" })
                 require(document["hooks"].contains(event) && document["hooks"][event].back()["hooks"][0]["command"] == command, "Hook event missing.");
@@ -442,7 +446,7 @@ namespace session_board {
 
             std::ofstream { source, std::ios::binary } << "helper-v2";
             result = ensure_claude_hooks(settings, source, install);
-            require(result.helper_updated && !result.changed && file_text(install / "session-board-hook.exe") == "helper-v2", "Updated helper not installed.");
+            require(result.helper_updated && !result.changed && file_text(install / "session-board.exe") == "helper-v2", "Updated helper not installed.");
 
             document = nlohmann::ordered_json::parse(registered);
             document["hooks"]["Stop"].push_back(document["hooks"]["Stop"].back());

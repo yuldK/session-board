@@ -46,10 +46,10 @@ ctest --preset vs2026-release
 cmake --install build/vs2026 --config Release
 ```
 
-`cmake --install`은 `session-board.exe`, `session-board-hook.exe`, `json-LICENSE.txt`를 프로젝트의 `bin/`에 복사합니다.
+`cmake --install`은 `session-board.exe`와 `json-LICENSE.txt`를 프로젝트의 `bin/`에 복사합니다. Hook도 같은 실행 파일이 `--hook` 인자로 처리하므로 배포 파일은 이 둘뿐입니다.
 `--prefix <폴더>`로 다른 곳에 설치할 수 있습니다.
 설치한 앱을 실행 중이면 파일이 잠겨 덮어쓰지 못하므로 먼저 종료하세요.
-Hook 스크립트로 설치본의 helper를 등록하려면 `-Executable bin/session-board-hook.exe`를 지정합니다.
+Hook 스크립트로 설치본을 등록하려면 `-Executable bin/session-board.exe`를 지정합니다.
 
 VS 2022는 `vs2022`, `vs2022-release` 프리셋을 사용합니다.
 기존 Skia 패키지가 있다면 복사하거나 다시 받지 않고 configure 인자로 지정할 수 있습니다.
@@ -59,7 +59,7 @@ cmake --preset vs2026 -DLUIL_SKIA_ROOT=<Skia 패키지 폴더>
 ```
 
 초기 luil 빌드는 오래 걸릴 수 있습니다. CPU 렌더러, 정적 CRT를 사용하고 WebView와 Direct3D는 비활성화했습니다.
-Hook 실행 파일은 luil/Skia를 링크하지 않습니다. 기본 설정에는 별도 서비스나 웹 런타임이 필요 없습니다.
+Hook도 같은 실행 파일이 처리하지만 `--hook` 실행은 창과 luil 화면을 만들지 않고 이벤트 하나만 저장합니다. 기본 설정에는 별도 서비스나 웹 런타임이 필요 없습니다.
 서브모듈은 luil 커밋 `96f29a6`(자석 슬라이더 포함)에 고정했습니다.
 
 ## 실행과 데모
@@ -115,10 +115,11 @@ Codex 앱에서 연 스레드(로컬 기록의 `originator`가 `Codex Desktop`)�
 
 ## Codex Hook 등록
 
-일반 실행에서는 앱이 **Codex Hook을 자동 등록**합니다. 배포할 때 `session-board.exe`와 `session-board-hook.exe`를 같은 폴더에 두세요.
-helper를 `%LOCALAPPDATA%/SessionBoard/bin`에 설치하고 `CODEX_HOME` 또는 `%USERPROFILE%/.codex`의 `hooks.json`에 Session Board 8개 항목을 넣습니다.
+일반 실행에서는 앱이 **Codex Hook을 자동 등록**합니다. 배포할 때 `session-board.exe`와 `json-LICENSE.txt`를 같은 폴더에 두세요.
+앱 자신을 `%LOCALAPPDATA%/SessionBoard/bin`에 복사하고 `CODEX_HOME` 또는 `%USERPROFILE%/.codex`의 `hooks.json`에 `session-board.exe --hook --provider codex` 8개 항목을 넣습니다.
+예전 `session-board-hook.exe` 항목은 새 명령으로 바꿔 끼우므로, 업데이트 뒤 Codex의 `/hooks`에서 한 번 다시 신뢰해야 합니다.
 기존 설정·다른 Hook을 보존하고 변경 전 `.bak`을 만듭니다. 정의가 같으면 설정 파일을 쓰지 않아 기존 신뢰 상태도 유지합니다.
-helper가 없거나 교체에 실패하면 설정을 바꾸지 않고 하단에 등록 오류를 표시합니다. 로컬 세션 탐색은 계속됩니다.
+복사본이 없거나 교체에 실패하면 설정을 바꾸지 않고 하단에 등록 오류를 표시합니다. 로컬 세션 탐색은 계속됩니다.
 
 새 환경에서는 등록 후 **Codex의 `/hooks`에서 최초 신뢰 검토**가 필요합니다. 앱은 신뢰 설정을 대신 쓰지 않습니다.
 새로 등록했을 때 하단에 `/hooks 신뢰 필요`를 표시합니다. `Hooks 등록됨`은 설정 파일 등록 결과이며 신뢰 상태를 조회한 결과는 아닙니다.
@@ -157,7 +158,7 @@ WSL/원격/클라우드에서 실행되는 Hook은 이 Windows 저장소로 전�
 기본 실행에서는 `CLAUDE_CONFIG_DIR` 또는 `%USERPROFILE%/.claude`의 **이미 열린 Claude Code 세션을 자동 탐색**합니다.
 실행 중 세션 등록 정보(`sessions/<pid>.json`)를 실제 프로세스 생성 시각과 대조해 열린 세션을 구별하고, transcript의 추가분에서 공개 진행 메시지와 도구 동작을 읽습니다.
 
-앱을 열면 Claude Hook도 **자동으로 등록**합니다. 앱 옆의 helper를 `%LOCALAPPDATA%/SessionBoard/bin`에 설치하고 `settings.json`에 Session Board 항목만 넣습니다.
+앱을 열면 Claude Hook도 **자동으로 등록**합니다. 같은 복사본을 `session-board.exe --hook --provider claude`로 `settings.json`에 Session Board 항목만 넣습니다.
 이미 등록되어 있으면 파일을 쓰지 않고, 바꿀 때는 `.bak`으로 백업합니다. 다른 설정과 Hook은 보존합니다. Claude Code는 실행 중인 세션에도 변경을 반영합니다.
 
 ```powershell
@@ -193,7 +194,7 @@ ctest --preset vs2026-release
 ```
 
 `tests/hook-startup.ps1`은 별도 Codex·Claude 설정 폴더와 격리 데스크톱에서 앱을 두 번 실행합니다.
-최초 자동 등록, 다른 설정·Hook 보존, 반복 실행 시 설정 파일 미수정을 확인합니다. 실제 사용자 설정은 변경하지 않으며 공용 helper만 최신 빌드로 갱신합니다.
+최초 자동 등록, 다른 설정·Hook 보존, 반복 실행 시 설정 파일 미수정을 확인합니다. 실제 사용자 설정은 변경하지 않으며 공용 복사본만 최신 빌드로 갱신합니다.
 
 `scripts/verify-codex-live.ps1 -RunTurn`은 신뢰 처리된 실제 Codex 런타임에 일회성 읽기 전용 요청을 보냅니다.
 기존 Codex 인증을 사용해 실제 모델 요청 1회를 실행하며 사용자 파일은 수정하지 않습니다.
