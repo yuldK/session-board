@@ -6,7 +6,9 @@
             "hidden": true,
             "architecture": "x64",
             "binaryDir": "${sourceDir}/build/${presetName}",
+            "installDir": "${sourceDir}/bin",
             "cacheVariables": {
+                "CMAKE_INSTALL_PREFIX": "${sourceDir}/bin",
                 "CMAKE_SYSTEM_VERSION": "10.0.22621.0",
                 "CMAKE_CONFIGURATION_TYPES": "Debug;Release"
             }

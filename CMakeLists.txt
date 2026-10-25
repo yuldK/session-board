@@ -46,6 +46,10 @@ set_target_properties(session_board_hook PROPERTIES OUTPUT_NAME session-board-ho
 target_link_libraries(session_board_hook PRIVATE session_board_core)
 configure_file(third_party/luil/third_party/nlohmann_json/LICENSE.MIT "${CMAKE_BINARY_DIR}/bin/json-LICENSE.txt" COPYONLY)
 
+# 앱이 Hook 등록 때 자기 옆의 helper와 라이선스를 복사하므로 셋을 같은 폴더에 둔다.
+install(TARGETS session_board session_board_hook RUNTIME DESTINATION .)
+install(FILES third_party/luil/third_party/nlohmann_json/LICENSE.MIT DESTINATION . RENAME json-LICENSE.txt)
+
 if(SESSION_BOARD_BUILD_TESTS)
     enable_testing()
     add_executable(session_board_tests tests/session_tests.cpp)

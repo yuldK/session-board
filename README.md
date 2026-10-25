@@ -30,7 +30,13 @@ git -C third_party/luil submodule update --init third_party/nlohmann_json
 cmake --preset vs2026
 cmake --build --preset vs2026-release --parallel
 ctest --preset vs2026-release
+cmake --install build/vs2026 --config Release
 ```
+
+`cmake --install`은 `session-board.exe`, `session-board-hook.exe`, `json-LICENSE.txt`를 프로젝트의 `bin/`에 복사합니다.
+`--prefix <폴더>`로 다른 곳에 설치할 수 있습니다.
+설치한 앱을 실행 중이면 파일이 잠겨 덮어쓰지 못하므로 먼저 종료하세요.
+Hook 스크립트로 설치본의 helper를 등록하려면 `-Executable bin/session-board-hook.exe`를 지정합니다.
 
 VS 2022는 `vs2022`, `vs2022-release` 프리셋을 사용합니다.
 기존 Skia 패키지가 있다면 복사하거나 다시 받지 않고 configure 인자로 지정할 수 있습니다.
