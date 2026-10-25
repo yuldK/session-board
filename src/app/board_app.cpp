@@ -3,9 +3,11 @@
 #include "core/host_window.h"
 #include "luil/generated/codicons.h"
 
+#include "include/core/SkBlendMode.h"
 #include "include/core/SkCanvas.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
+#include "include/effects/SkGradient.h"
 #include "include/utils/SkParsePath.h"
 
 #include <nlohmann/json.hpp>
@@ -235,6 +237,73 @@ namespace session_board {
             if (error != std::errc {} || end != first + text.size() || !std::isfinite(value))
                 return std::nullopt;
             return value;
+        }
+
+        // 흘리는 목록의 위·아래 끝을 투명하게 지운다. 반투명 위젯이라 그림자 대신 내용 자체가 옅어지며 사라지게 한다.
+        //  - 흘린 쪽에만 걸고, 끝에서 떨어진 거리를 따라 `scroll_edge_strength`로 짙어진다 (흘리기 시작할 때 툭 켜지지 않게).
+        //  - 막대 자리는 지우지 않는다 (`viewport` 안쪽만).
+        class scroll_fade final : public luil::ui_element
+        {
+        public:
+            scroll_fade(const std::u8string& id, std::unique_ptr<luil::scroll_area_element> content)
+                : ui_element { luil::ui_element_id { kind_layout, id } }
+                , area_ { content.get() }
+            {
+                set_hit_opaque(false);
+                add_child(std::move(content));
+            }
+
+            void arrange(const luil::arrange_context& context) override
+            {
+                set_bounds(context.slot);
+                for (const auto& child : children())
+                    child->arrange(context.for_child(context.slot));
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot& interaction) const override
+            {
+                const luil::scroll_metrics& metrics { area_->metrics() };
+                const float top { luil::scroll_edge_strength(metrics.scroll_offset) };
+                const float bottom { luil::scroll_edge_strength(metrics.maximum_scroll - metrics.scroll_offset) };
+                if (top <= 0.0f && bottom <= 0.0f)
+                {
+                    draw_children(context, interaction);
+                    return;
+                }
+                const luil::rect_f box { bounds() };
+                const SkRect layer { SkRect::MakeXYWH(box.x, box.y, box.width, box.height) };
+                context.canvas.saveLayer(&layer, nullptr);
+                draw_children(context, interaction);
+                const luil::rect_f view { area_->viewport() };
+                const float band { std::min(fade_distance * context.scale, view.height / 2.0f) };
+                // 끝에서 `1 - strength`만 남기고 띠 안쪽으로 갈수록 온전히 남긴다 (DstIn은 그린 알파만큼 아래를 남긴다).
+                const auto erase = [&](const float edge, const float inner, const float strength) {
+                    if (strength <= 0.0f || band <= 0.0f)
+                        return;
+                    const SkPoint points[2] { { view.x, edge }, { view.x, inner } };
+                    const SkColor4f colors[2] { { 0.0f, 0.0f, 0.0f, 1.0f - strength }, { 0.0f, 0.0f, 0.0f, 1.0f } };
+                    SkPaint paint {};
+                    paint.setShader(SkShaders::LinearGradient(points, SkGradient { SkGradient::Colors { colors, SkTileMode::kClamp }, {} }));
+                    paint.setBlendMode(SkBlendMode::kDstIn);
+                    context.canvas.drawRect(SkRect::MakeLTRB(view.x, std::min(edge, inner), view.x + view.width, std::max(edge, inner)), paint);
+                };
+                erase(view.y, view.y + band, top);
+                erase(view.y + view.height, view.y + view.height - band, bottom);
+                context.canvas.restore();
+            }
+
+        private:
+            static constexpr float fade_distance { 20.0f };
+            luil::scroll_area_element* area_ { nullptr };
+        };
+
+        // OS 앱 모드가 어두운가다. 시스템 테마를 고른 동안 상세 창의 밝기 단추가 지금 보이는 반대쪽을 고르는 데 쓴다.
+        bool system_dark()
+        {
+            DWORD value { 1 };
+            DWORD size { sizeof(value) };
+            const auto result { RegGetValueW(HKEY_CURRENT_USER, L"Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize", L"AppsUseLightTheme", RRF_RT_REG_DWORD, nullptr, &value, &size) };
+            return result == ERROR_SUCCESS && value == 0;
         }
 
         // 쓰다 끊겨도 옛 파일이 남도록 임시 파일을 다 쓴 뒤 바꿔 끼운다. 실패는 삼킨다.
@@ -876,7 +945,10 @@ namespace session_board {
         // 진하기의 자석이다. 0%는 바탕 없이 글만 뜨고, 100%는 DWM 합성을 끈 불투명 창이다.
         constexpr std::array<float, 6> widget_opacity_magnets { 0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f };
         constexpr float widget_row_inset { 12.0f };
-        constexpr float widget_theme_choice_width { 140.0f };
+        // 위젯 설정 줄의 테마 카드다. luil 기본(112×70)은 위젯 폭에 세 장이 들지 않아 줄인다.
+        constexpr float widget_theme_card_width { 88.0f };
+        constexpr float widget_theme_preview_height { 46.0f };
+        constexpr float widget_theme_card_gap { 8.0f };
 
         std::unique_ptr<luil::button_element> widget_button(const std::u8string& id, const std::u8string& name, const char32_t glyph, luil::ui_action action, const bool active = false)
         {
@@ -1107,7 +1179,7 @@ namespace session_board {
         , claude_directory_ { std::move(claude_directory) }
         , claude_hooks_ { std::move(claude_hooks) }
         , codex_hooks_ { std::move(codex_hooks) }
-        , dark_ { appearance.dark }
+        , theme_ { appearance.theme }
         , detail_open_ { open_detail }
         , accent_id_ { appearance.accent_id }
         , backdrop_ { appearance.backdrop }
@@ -1211,9 +1283,9 @@ namespace session_board {
             detail_scroll_ = 0.0f;
         }
         else if (message.get<theme_intent>() != nullptr)
-            dark_ = !dark_;
+            theme_ = dark() ? luil::theme_preference::light : luil::theme_preference::dark;
         else if (const auto* mode { message.get<theme_mode_intent>() }; mode != nullptr)
-            dark_ = mode->dark;
+            theme_ = mode->theme;
         else if (const auto* accent { message.get<accent_intent>() }; accent != nullptr)
             accent_id_ = accent->id;
         else if (message.get<widget_failed_intent>() != nullptr)
@@ -1314,11 +1386,16 @@ namespace session_board {
         next_tick_ = now + std::chrono::seconds { 1 };
     }
 
+    bool board_driver::dark() const
+    {
+        return theme_ == luil::theme_preference::system ? system_dark() : theme_ == luil::theme_preference::dark;
+    }
+
     void board_driver::save_appearance()
     {
         if (appearance_file_.empty())
             return;
-        const widget_appearance current { .dark = dark_, .accent_id = accent_id_, .backdrop = backdrop_, .opacity = opacity_ };
+        const widget_appearance current { .theme = theme_, .accent_id = accent_id_, .backdrop = backdrop_, .opacity = opacity_ };
         if (current == saved_appearance_)
             return;
         save_widget_appearance(appearance_file_, current);
@@ -1331,7 +1408,7 @@ namespace session_board {
         if (!notice_.empty() && std::chrono::steady_clock::now() >= notice_until_)
             notice_.clear();
         auto frame { std::make_shared<luil::ui_frame>() };
-        frame->appearance.theme = dark_ ? luil::theme_preference::dark : luil::theme_preference::light;
+        frame->appearance.theme = theme_;
         frame->appearance.accent_id = accent_id_;
         frame->style = style_;
         frame->tree = std::make_shared<const luil::ui_tree>(make_widget_tree(now));
@@ -1340,7 +1417,7 @@ namespace session_board {
             // 위젯으로 지켜보다가 자세히 볼 때 여는 독립 창이다. 작업 표시줄에 따로 선다.
             luil::ui_window detail {};
             detail.id = u8"detail";
-            detail.caption = detail_caption(dark_);
+            detail.caption = detail_caption(dark());
             detail.x = -1140.0f;
             detail.width = 1120.0f;
             detail.height = 800.0f;
@@ -1370,7 +1447,7 @@ namespace session_board {
         ground->arrange({ { 0.0f, 0.0f, width, height }, scale });
         root->add(std::move(ground));
         // 창 전체의 명령은 caption의 앱 단추로 둔다. 본문은 세션만 다룬다.
-        const auto caption_config { detail_caption(dark_) };
+        const auto caption_config { detail_caption(dark()) };
         const float caption_height { luil::caption_element::height_for(caption_config) * scale };
         auto caption { std::make_unique<luil::caption_element>(caption_config) };
         caption->arrange({ { 0.0f, 0.0f, width, caption_height }, scale });
@@ -1603,24 +1680,28 @@ namespace session_board {
                 // 밝기와 키 컬러다. 키 컬러는 앱 전체 외양이라 상세 창도 함께 바뀐다.
                 const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 10.0f } };
                 auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-theme-settings" }, settings_config) };
-                luil::choice_group_config mode { .owner = u8"widget-theme-mode", .style = luil::choice_style::toggle, .name = u8"테마" };
-                mode.items.push_back({ u8"theme-light", u8"밝게" });
-                mode.items.push_back({ u8"theme-dark", u8"어둡게" });
-                mode.selected = dark_ ? u8"theme-dark" : u8"theme-light";
-                mode.select = [](const std::u8string& value) { return luil::make_app_action(theme_mode_intent { value == u8"theme-dark" }); };
-                auto mode_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-theme-row" }, row_config) };
-                mode_row->add(label(u8"widget-theme-name", u8"테마", 11.0f, luil::label_color_role::dim), 40.0f);
-                mode_row->add(std::make_unique<luil::choice_group_element>(std::move(mode)), { .length = widget_theme_choice_width, .cross_length = luil::choice_toggle_height });
-                mode_row->add_flexible_gap();
-                settings->add(std::move(mode_row), widget_setting_row);
+                // 카드·견본 줄 수는 폭으로 정해지므로 실제로 받을 폭(목록 영역 여백·설정 여백·테두리를 뺀 값)으로 높이를 잰다.
+                const float picker_width { inner_width - 2.0f * widget_gap - 20.0f - 2.0f };
+                settings->add(label(u8"widget-theme-name", u8"테마", 11.0f, luil::label_color_role::dim), 16.0f);
+                luil::theme_picker_config themes {
+                    .owner = u8"theme-mode",
+                    .selected = theme_,
+                    .name = u8"테마",
+                    .accent_id = accent_id_,
+                    .card_width = widget_theme_card_width,
+                    .preview_height = widget_theme_preview_height,
+                    .gap = widget_theme_card_gap,
+                };
+                themes.select = [](const luil::theme_preference value) { return luil::make_app_action(theme_mode_intent { value }); };
+                const float themes_height { luil::theme_picker_element::height_for(themes, picker_width) };
+                settings->add(std::make_unique<luil::theme_picker_element>(std::move(themes)), themes_height);
+                settings->add_gap(4.0f);
                 settings->add(label(u8"widget-accent-name", u8"키 컬러", 11.0f, luil::label_color_role::dim), 16.0f);
                 luil::accent_picker_config accents { .owner = u8"widget-accent", .selected = accent_id_, .name = u8"키 컬러" };
                 accents.select = [](const std::u8string& id) { return luil::make_app_action(accent_intent { id }); };
-                // 견본 줄 수는 폭으로 정해지므로 실제로 받을 폭(목록 영역 여백·설정 여백·테두리를 뺀 값)으로 높이를 잰다.
-                const float picker_width { inner_width - 2.0f * widget_gap - 20.0f - 2.0f };
                 const float picker_height { luil::accent_picker_element::height_for(accents, picker_width) };
                 settings->add(std::make_unique<luil::accent_picker_element>(std::move(accents)), picker_height);
-                const float settings_height { 16.0f + widget_setting_row + 4.0f + 16.0f + 4.0f + picker_height };
+                const float settings_height { 16.0f + 16.0f + 4.0f + themes_height + 4.0f + 4.0f + 16.0f + 4.0f + picker_height };
                 region->add(panel(u8"widget-theme-surface", std::move(settings)), settings_height);
                 used += settings_height + widget_gap;
             }
@@ -1629,18 +1710,23 @@ namespace session_board {
                 // 흐림과 진하기다. 팝업을 띄우지 않고 머릿줄 아래에 펼친다 — 위젯 창은 바탕이 투명하다.
                 const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 6.0f } };
                 auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-settings" }, settings_config) };
-                // DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 스위치도 앱 UI 명령으로 답한다.
-                const bool blur { backdrop_ == widget_backdrop::blur };
-                luil::check_config effect { .owner = u8"widget-blur", .style = luil::check_style::toggle_switch, .label = u8"흐림", .checked = blur };
-                effect.toggle = command_action(blur ? backdrop_transparent_command : backdrop_blur_command);
-                // 100%에서는 비칠 자리가 없어 스위치가 하는 일이 없다. 값은 남겨 두고 진하기를 내리면 다시 따른다.
+                // 투명·흐림 중 하나를 켜 두는 칩 한 쌍이다. 켜진 칩을 다시 눌러도 그대로다.
+                //  - DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 칩도 앱 UI 명령으로 답한다.
+                //  - 100%에서는 비칠 자리가 없어 칩이 하는 일이 없다. 값은 남겨 두고 진하기를 내리면 다시 따른다.
                 const bool opaque { fully_opaque(opacity_) };
-                effect.tooltip = opaque ? u8"진하기가 100%라 뒤가 비치지 않습니다" : u8"끄면 뒤가 흐리지 않고 그대로 비칩니다";
-                auto effect_check { std::make_unique<luil::check_element>(std::move(effect)) };
-                effect_check->set_enabled(!opaque);
                 auto effect_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-backdrop-row" }, row_config) };
                 effect_row->add(label(u8"widget-backdrop-name", u8"배경", 11.0f, luil::label_color_role::dim), 40.0f);
-                effect_row->add_flexible(std::move(effect_check));
+                const auto add_chip = [&](const std::u8string& owner, const std::u8string& name, const widget_backdrop value, const std::uint32_t command, const std::u8string& tooltip) {
+                    luil::check_config chip { .owner = owner, .style = luil::check_style::toggle_chip, .label = name, .checked = backdrop_ == value };
+                    chip.toggle = command_action(command);
+                    chip.tooltip = opaque ? std::u8string { u8"진하기가 100%라 뒤가 비치지 않습니다" } : tooltip;
+                    auto element { std::make_unique<luil::check_element>(std::move(chip)) };
+                    element->set_enabled(!opaque);
+                    effect_row->add_fit(std::move(element));
+                };
+                add_chip(u8"widget-transparent", u8"투명", widget_backdrop::transparent, backdrop_transparent_command, u8"뒤가 흐리지 않고 그대로 비칩니다");
+                add_chip(u8"widget-blur", u8"흐림", widget_backdrop::blur, backdrop_blur_command, u8"뒤를 흐린 Acrylic 위에 진하기만큼 바탕을 깝니다");
+                effect_row->add_flexible_gap();
                 settings->add(std::move(effect_row), widget_setting_row);
                 // 끌면 자석 지점에 붙고, Ctrl을 누른 채 끌면 붙지 않는다.
                 //  - 값은 위젯 창이 먼저 받는다. 100%를 넘나들 때 DWM 합성을 그 창의 thread에서 바꿔야 한다.
@@ -1715,7 +1801,7 @@ namespace session_board {
                 auto scroll { std::make_unique<luil::scroll_area_element>(config) };
                 scroll->set_content(std::move(rows));
                 scroll_metrics = scroll.get();
-                region->add_flexible(std::move(scroll));
+                region->add_flexible(std::make_unique<scroll_fade>(u8"widget-scroll-fade", std::move(scroll)));
             }
             else
             {
@@ -1859,7 +1945,7 @@ namespace session_board {
                 return result;
             const auto value { nlohmann::json::parse(input) };
             if (const auto theme { value.find("theme") }; theme != value.end() && theme->is_string())
-                result.dark = theme->get<std::string>() != "light";
+                static_cast<void>(luil::parse_theme_preference(u8(theme->get<std::string>()), result.theme));
             // 목록에 없는 id로 두면 표시만 기본색으로 물러서고 견본은 아무것도 고르지 않은 채가 된다.
             if (const auto accent { value.find("accent") }; accent != value.end() && accent->is_string())
                 if (const auto id { u8(accent->get<std::string>()) }; luil::accent_exists(id))
@@ -1881,8 +1967,9 @@ namespace session_board {
     {
         try
         {
+            const std::u8string_view theme { luil::theme_preference_name(appearance.theme) };
             const nlohmann::json value {
-                { "theme", appearance.dark ? "dark" : "light" },
+                { "theme", std::string { theme.begin(), theme.end() } },
                 { "accent", std::string { appearance.accent_id.begin(), appearance.accent_id.end() } },
                 { "backdrop", appearance.backdrop == widget_backdrop::transparent ? "transparent" : "blur" },
                 { "opacity", appearance.opacity },

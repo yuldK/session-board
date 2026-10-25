@@ -39,7 +39,7 @@ namespace session_board {
     {};
     struct theme_mode_intent
     {
-        bool dark { true };
+        luil::theme_preference theme { luil::theme_preference::dark };
     };
     // 키 컬러를 이 id로 둔다 (luil 키 컬러 목록의 id).
     struct accent_intent
@@ -116,7 +116,7 @@ namespace session_board {
     // 위젯 외양이다. 다음 실행에 그대로 되살린다.
     struct widget_appearance
     {
-        bool dark { true };
+        luil::theme_preference theme { luil::theme_preference::dark };
         std::u8string accent_id { luil::default_accent_id };
         widget_backdrop backdrop { widget_backdrop::blur };
         float opacity { widget_default_opacity };
@@ -155,6 +155,8 @@ namespace session_board {
 
     private:
         void reload();
+        // 지금 보이는 테마가 어두운가다 (시스템이면 OS 앱 모드).
+        [[nodiscard]] bool dark() const;
         // 외양이 마지막으로 저장한 값과 다르면 저장한다. 진하기를 끄는 동안 쓰기가 몰리지 않게 tick과 종료 때만 부른다.
         void save_appearance();
         // 주 창(위젯)의 tree다.
@@ -189,7 +191,8 @@ namespace session_board {
         std::u8string notice_ {};
         std::chrono::steady_clock::time_point notice_until_ {};
         bool working_only_ { false };
-        bool dark_ { true };
+        // 시스템이면 OS 앱 모드를 따른다. 그리기는 luil이 풀고, 앱은 상세 창 밝기 단추에서만 지금 보이는 쪽을 묻는다.
+        luil::theme_preference theme_ { luil::theme_preference::dark };
         bool detail_open_ { false };
         bool collapsed_ { false };
         bool pinned_ { true };

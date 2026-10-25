@@ -162,9 +162,9 @@ try {
     $null = Step "Wait-LuilElement -id 'theme' -name '밝게' -all_surfaces"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'detail-dark.png')' -surface (Get-LuilSurfaces | Where-Object { `$_.Current.Name -like '*상세*' })"
 
-    # 위젯의 흐림을 끄고 진하기를 고른 뒤 설정 줄을 다시 접는다.
+    # 위젯 배경을 투명 칩으로 바꾸고 진하기를 고른 뒤 설정 줄을 다시 접는다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
-    $null = Step "Set-LuilToggle -on `$false (Wait-LuilElement -id 'widget-blur')"
+    $null = Step "Set-LuilToggle -on `$true (Wait-LuilElement -id 'widget-transparent')"
     $blur = Step "(Get-LuilState (Wait-LuilElement -id 'widget-blur')).toggle"
     if ("$blur" -notmatch 'Off') {
         throw 'The blur switch did not turn off.'
@@ -190,17 +190,17 @@ try {
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
     $null = Step "Wait-LuilElement -id 'widget-blur' -absent"
 
-    # 위젯의 테마 단추는 밝기와 키 컬러를 고르는 설정 줄을 펼친다.
+    # 위젯의 테마 단추는 밝게·시스템·어둡게 카드와 키 컬러를 고르는 설정 줄을 펼친다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')"
     $null = Step "Select-LuilItem (Wait-LuilElement -id 'widget-accent/violet')"
     $accent = Step "(Get-LuilState (Wait-LuilElement -id 'widget-accent/violet')).selected"
     if ("$accent" -notmatch 'True') {
         throw 'The accent swatch was not selected.'
     }
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-light')"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-mode/light')"
     $null = Step "Wait-LuilElement -id 'theme' -name '어둡게' -all_surfaces"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-theme.png')'"
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-dark')"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-mode/dark')"
     $null = Step "Wait-LuilElement -id 'theme' -name '밝게' -all_surfaces"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')"
     $null = Step "Wait-LuilElement -id 'widget-accent' -absent"
