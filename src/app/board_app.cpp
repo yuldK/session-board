@@ -733,6 +733,9 @@ namespace session_board {
         constexpr float widget_group_header { 28.0f };
         constexpr float widget_footer_height { 30.0f };
         constexpr float widget_setting_row { 26.0f };
+        // 진하기의 범위와 자석이다. 자석은 예전 단추 값이라 손에 익은 값에 바로 붙는다.
+        constexpr float widget_opacity_minimum { 0.1f };
+        constexpr std::array<float, 4> widget_opacity_magnets { 0.2f, 0.35f, 0.5f, 0.7f };
         constexpr float widget_row_inset { 12.0f };
 
         std::unique_ptr<luil::button_element> widget_button(const std::u8string& id, const std::u8string& name, const char32_t glyph, luil::ui_action action, const bool active = false)
@@ -1071,7 +1074,9 @@ namespace session_board {
         else if (const auto* backdrop { message.get<backdrop_intent>() }; backdrop != nullptr)
             backdrop_ = backdrop->backdrop;
         else if (const auto* opacity { message.get<opacity_intent>() }; opacity != nullptr)
-            opacity_ = std::clamp(opacity->value, 0.1f, 1.0f);
+            opacity_ = std::clamp(opacity->value, widget_opacity_minimum, 1.0f);
+        else if (const auto* change { message.get<opacity_change_intent>() }; change != nullptr)
+            opacity_ = std::clamp(opacity_ + change->delta, widget_opacity_minimum, 1.0f);
         else if (message.get<backdrop_settings_intent>() != nullptr)
             backdrop_settings_open_ = !backdrop_settings_open_;
         else if (const auto* focus { message.get<focus_session_intent>() }; focus != nullptr)
@@ -1421,15 +1426,18 @@ namespace session_board {
                 effect_row->add(label(u8"widget-backdrop-name", u8"배경", 11.0f, luil::label_color_role::dim), 40.0f);
                 effect_row->add_flexible(std::make_unique<luil::check_element>(std::move(effect)));
                 settings->add(std::move(effect_row), widget_setting_row);
-                luil::choice_group_config level { .owner = u8"widget-opacity-choice", .style = luil::choice_style::toggle, .name = u8"진하기" };
-                for (const int percent : { 20, 35, 50, 70, 100 })
-                    level.items.push_back({ u8"opacity-" + u8(std::to_string(percent)), u8(std::to_string(percent)) + u8"%" });
-                level.selected = u8"opacity-" + u8(std::to_string(static_cast<int>(std::lround(opacity_ * 100.0f))));
-                level.select
-                    = [](const std::u8string& value) { return luil::make_app_action(opacity_intent { static_cast<float>(std::stoi(std::string { value.begin() + 8, value.end() })) / 100.0f }); };
+                // 끌면 예전 단추 값에 붙고, Ctrl을 누른 채 끌면 붙지 않는다.
+                luil::slider_config level { .minimum = widget_opacity_minimum, .maximum = 1.0f, .value = opacity_ };
+                level.change = [](const float delta) { return luil::make_app_action(opacity_change_intent { delta }); };
+                level.change_to = [](const float value) { return luil::make_app_action(opacity_intent { value }); };
+                level.magnets.assign(widget_opacity_magnets.begin(), widget_opacity_magnets.end());
+                auto slider { std::make_unique<luil::slider_element>(luil::ui_element_id { kind_button, u8"widget-opacity" }, std::move(level)) };
+                // 슬라이더는 보조 기술 이름을 tooltip에서만 읽는다.
+                slider->set_tooltip(u8"진하기");
                 auto level_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-opacity-row" }, row_config) };
                 level_row->add(label(u8"widget-opacity-name", u8"진하기", 11.0f, luil::label_color_role::dim), 40.0f);
-                level_row->add_flexible(std::make_unique<luil::choice_group_element>(std::move(level)));
+                level_row->add_flexible(std::move(slider));
+                level_row->add(label(u8"widget-opacity-value", u8(std::to_string(std::lround(opacity_ * 100.0f))) + u8"%", 11.0f, luil::label_color_role::dim, luil::text_align::end), 36.0f);
                 settings->add(std::move(level_row), widget_setting_row);
                 constexpr float settings_height { 12.0f + 2.0f * widget_setting_row + 4.0f };
                 region->add(panel(u8"widget-settings-surface", std::move(settings)), settings_height);

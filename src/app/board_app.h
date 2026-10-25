@@ -79,9 +79,15 @@ namespace session_board {
     {
         widget_backdrop backdrop { widget_backdrop::blur };
     };
+    // 진하기를 이 값으로 둔다 (자석에 붙음, 보조 기술의 값 정하기).
     struct opacity_intent
     {
         float value { 0.35f };
+    };
+    // 진하기를 이만큼 바꾼다 (끌기, 키).
+    struct opacity_change_intent
+    {
+        float delta { 0.0f };
     };
     struct backdrop_settings_intent
     {};

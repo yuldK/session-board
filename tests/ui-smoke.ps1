@@ -166,7 +166,8 @@ try {
     if ("$blur" -notmatch 'Off') {
         throw 'The blur switch did not turn off.'
     }
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'opacity-50')"
+    $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity')"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '50%'"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-settings.png')'"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
     $null = Step "Wait-LuilElement -id 'widget-blur' -absent"
