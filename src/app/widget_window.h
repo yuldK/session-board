@@ -9,12 +9,13 @@
 namespace session_board {
     inline constexpr std::uint32_t toggle_collapse_command { 2 };
     inline constexpr std::uint32_t toggle_pin_command { 3 };
-    inline constexpr std::uint32_t backdrop_blur_command { 4 };
+    inline constexpr std::uint32_t backdrop_acrylic_command { 4 };
     inline constexpr std::uint32_t backdrop_transparent_command { 5 };
     // 진하기를 인자의 값으로 둔다 (자석에 붙음, 보조 기술의 값 정하기). 인자는 0~1의 수다.
     inline constexpr std::uint32_t opacity_command { 6 };
     // 진하기를 인자만큼 바꾼다 (끌기, 키).
     inline constexpr std::uint32_t opacity_change_command { 7 };
+    inline constexpr std::uint32_t backdrop_blur_command { 8 };
     inline constexpr float widget_default_opacity { 0.35f };
     inline constexpr int widget_width { 400 };
     inline constexpr int widget_height { 560 };
@@ -27,10 +28,12 @@ namespace session_board {
     // 진하기가 100%면 이 값과 관계없이 DWM 합성을 끄고 불투명 창으로 둔다.
     enum class widget_backdrop
     {
-        // 뒤를 흐린다 (Windows 11 Acrylic).
-        blur,
+        // 뒤를 흐리고 Windows가 정한 색 막과 잡티 무늬를 덧씌운다 (Windows 11 Acrylic).
+        acrylic,
         // 뒤가 그대로 비친다.
         transparent,
+        // 뒤를 흐리기만 하고 색을 덧씌우지 않는다. 비공개 API라 없는 Windows에서는 Acrylic으로 물러선다.
+        blur,
     };
 
     // 진하기가 100%로 보이는 값이다. 표시는 백분율로 반올림하므로 판정도 같은 눈금을 쓴다.
@@ -70,7 +73,7 @@ namespace session_board {
         HWND window_ { nullptr };
         bool collapsed_ { false };
         bool pinned_ { true };
-        widget_backdrop backdrop_ { widget_backdrop::blur };
+        widget_backdrop backdrop_ { widget_backdrop::acrylic };
         float opacity_ { widget_default_opacity };
         int expanded_height_ { widget_height };
     };

@@ -306,6 +306,30 @@ namespace session_board {
             return result == ERROR_SUCCESS && value == 0;
         }
 
+        // 외양 파일에 적는 배경 이름이다. 예전 파일의 "blur"는 Acrylic이었으므로 색 없는 흐림은 "blur-plain"이다.
+        const char* backdrop_name(const widget_backdrop backdrop)
+        {
+            switch (backdrop)
+            {
+            case widget_backdrop::transparent:
+                return "transparent";
+            case widget_backdrop::blur:
+                return "blur-plain";
+            case widget_backdrop::acrylic:
+                break;
+            }
+            return "acrylic";
+        }
+
+        widget_backdrop backdrop_of_command(const std::uint32_t command)
+        {
+            if (command == backdrop_transparent_command)
+                return widget_backdrop::transparent;
+            if (command == backdrop_blur_command)
+                return widget_backdrop::blur;
+            return widget_backdrop::acrylic;
+        }
+
         // 쓰다 끊겨도 옛 파일이 남도록 임시 파일을 다 쓴 뒤 바꿔 끼운다. 실패는 삼킨다.
         void write_json_file(const std::filesystem::path& file, const nlohmann::json& value) noexcept
         {
@@ -1710,22 +1734,26 @@ namespace session_board {
                 // 흐림과 진하기다. 팝업을 띄우지 않고 머릿줄 아래에 펼친다 — 위젯 창은 바탕이 투명하다.
                 const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 6.0f } };
                 auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-settings" }, settings_config) };
-                // 투명·흐림 중 하나를 켜 두는 칩 한 쌍이다. 켜진 칩을 다시 눌러도 그대로다.
-                //  - DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 칩도 앱 UI 명령으로 답한다.
-                //  - 100%에서는 비칠 자리가 없어 칩이 하는 일이 없다. 값은 남겨 두고 진하기를 내리면 다시 따른다.
+                // 투명·흐림을 한 판 위에서 고르는 선택 묶음이다.
+                //  - DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 선택도 앱 UI 명령으로 답한다.
+                //  - 100%에서는 비칠 자리가 없어 고를 일이 없다. 값은 남겨 두고 진하기를 내리면 다시 따른다.
                 const bool opaque { fully_opaque(opacity_) };
                 auto effect_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-backdrop-row" }, row_config) };
                 effect_row->add(label(u8"widget-backdrop-name", u8"배경", 11.0f, luil::label_color_role::dim), 40.0f);
-                const auto add_chip = [&](const std::u8string& owner, const std::u8string& name, const widget_backdrop value, const std::uint32_t command, const std::u8string& tooltip) {
-                    luil::check_config chip { .owner = owner, .style = luil::check_style::toggle_chip, .label = name, .checked = backdrop_ == value };
-                    chip.toggle = command_action(command);
-                    chip.tooltip = opaque ? std::u8string { u8"진하기가 100%라 뒤가 비치지 않습니다" } : tooltip;
-                    auto element { std::make_unique<luil::check_element>(std::move(chip)) };
-                    element->set_enabled(!opaque);
-                    effect_row->add_fit(std::move(element));
+                luil::choice_group_config mode { .owner = u8"widget-backdrop-mode", .style = luil::choice_style::toggle, .name = u8"배경" };
+                mode.items.push_back({ u8"backdrop-transparent", u8"투명" });
+                mode.items.push_back({ u8"backdrop-blur", u8"흐림" });
+                mode.items.push_back({ u8"backdrop-acrylic", u8"Acrylic" });
+                mode.selected = backdrop_ == widget_backdrop::transparent ? u8"backdrop-transparent" : backdrop_ == widget_backdrop::blur ? u8"backdrop-blur" : u8"backdrop-acrylic";
+                mode.select = [](const std::u8string& value) {
+                    const std::uint32_t command { value == u8"backdrop-transparent" ? backdrop_transparent_command : value == u8"backdrop-blur" ? backdrop_blur_command : backdrop_acrylic_command };
+                    return luil::input_action { luil::app_ui_command { command } };
                 };
-                add_chip(u8"widget-transparent", u8"투명", widget_backdrop::transparent, backdrop_transparent_command, u8"뒤가 흐리지 않고 그대로 비칩니다");
-                add_chip(u8"widget-blur", u8"흐림", widget_backdrop::blur, backdrop_blur_command, u8"뒤를 흐린 Acrylic 위에 진하기만큼 바탕을 깝니다");
+                auto mode_element { std::make_unique<luil::choice_group_element>(std::move(mode)) };
+                mode_element->set_enabled(!opaque);
+                mode_element->set_tooltip(
+                    opaque ? u8"진하기가 100%라 뒤가 비치지 않습니다" : u8"투명은 뒤가 그대로 비치고, 흐림은 뒤를 흐리기만 하며, Acrylic은 흐린 뒤에 Windows의 색 막을 덧씌웁니다");
+                effect_row->add_fit(std::move(mode_element));
                 effect_row->add_flexible_gap();
                 settings->add(std::move(effect_row), widget_setting_row);
                 // 끌면 자석 지점에 붙고, Ctrl을 누른 채 끌면 붙지 않는다.
@@ -1950,8 +1978,12 @@ namespace session_board {
             if (const auto accent { value.find("accent") }; accent != value.end() && accent->is_string())
                 if (const auto id { u8(accent->get<std::string>()) }; luil::accent_exists(id))
                     result.accent_id = id;
+            // 모르는 이름(예전의 "blur" 포함)은 Acrylic이다.
             if (const auto backdrop { value.find("backdrop") }; backdrop != value.end() && backdrop->is_string())
-                result.backdrop = backdrop->get<std::string>() == "transparent" ? widget_backdrop::transparent : widget_backdrop::blur;
+            {
+                const auto name { backdrop->get<std::string>() };
+                result.backdrop = name == "transparent" ? widget_backdrop::transparent : name == "blur-plain" ? widget_backdrop::blur : widget_backdrop::acrylic;
+            }
             if (const auto opacity { value.find("opacity") }; opacity != value.end() && opacity->is_number())
                 if (const auto level { opacity->get<float>() }; std::isfinite(level))
                     result.opacity = std::clamp(level, 0.0f, 1.0f);
@@ -1971,7 +2003,7 @@ namespace session_board {
             const nlohmann::json value {
                 { "theme", std::string { theme.begin(), theme.end() } },
                 { "accent", std::string { appearance.accent_id.begin(), appearance.accent_id.end() } },
-                { "backdrop", appearance.backdrop == widget_backdrop::transparent ? "transparent" : "blur" },
+                { "backdrop", backdrop_name(appearance.backdrop) },
                 { "opacity", appearance.opacity },
             };
             write_json_file(file, value);
@@ -2024,10 +2056,10 @@ namespace session_board {
                 window_.toggle_pin();
             host.post_app_message(luil::app_message { widget_state_intent { window_.collapsed(), window_.pinned() } });
         }
-        else if (command.command == backdrop_blur_command || command.command == backdrop_transparent_command)
+        else if (command.command == backdrop_acrylic_command || command.command == backdrop_transparent_command || command.command == backdrop_blur_command)
         {
             // DWM 합성은 창을 가진 UI thread에서 바꾸고, 그릴 바탕의 진하기는 앱 상태로 알린다.
-            const auto backdrop { command.command == backdrop_blur_command ? widget_backdrop::blur : widget_backdrop::transparent };
+            const auto backdrop { backdrop_of_command(command.command) };
             window_.set_backdrop(backdrop);
             host.post_app_message(luil::app_message { backdrop_intent { backdrop } });
         }

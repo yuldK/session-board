@@ -92,7 +92,7 @@ namespace session_board {
     };
     struct backdrop_intent
     {
-        widget_backdrop backdrop { widget_backdrop::blur };
+        widget_backdrop backdrop { widget_backdrop::acrylic };
     };
     // 위젯 창이 다듬어 둔 진하기다. 100%에서 DWM 합성을 꺼야 하므로 슬라이더는 위젯 창(UI thread)에 먼저 알리고,
     // 그쪽이 합성을 고친 뒤 이 값을 보낸다.
@@ -118,7 +118,7 @@ namespace session_board {
     {
         luil::theme_preference theme { luil::theme_preference::dark };
         std::u8string accent_id { luil::default_accent_id };
-        widget_backdrop backdrop { widget_backdrop::blur };
+        widget_backdrop backdrop { widget_backdrop::acrylic };
         float opacity { widget_default_opacity };
 
         [[nodiscard]] bool operator==(const widget_appearance&) const = default;
@@ -199,7 +199,7 @@ namespace session_board {
         bool backdrop_settings_open_ { false };
         bool theme_settings_open_ { false };
         std::u8string accent_id_ { luil::default_accent_id };
-        widget_backdrop backdrop_ { widget_backdrop::blur };
+        widget_backdrop backdrop_ { widget_backdrop::acrylic };
         float opacity_ { widget_default_opacity };
         // 상세 창의 마지막 자리다. 비어 있으면 위젯 왼쪽의 기본 자리로 연다.
         //  - 파일이 비어 있으면 저장하지 않는다 (테스트 데이터로 연 실행). 그래도 이번 실행 안에서는 다시 열 때 쓴다.

@@ -164,31 +164,39 @@ try {
 
     # 위젯 배경을 투명 칩으로 바꾸고 진하기를 고른 뒤 설정 줄을 다시 접는다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
-    $null = Step "Set-LuilToggle -on `$true (Wait-LuilElement -id 'widget-transparent')"
-    $blur = Step "(Get-LuilState (Wait-LuilElement -id 'widget-blur')).toggle"
-    if ("$blur" -notmatch 'Off') {
-        throw 'The blur switch did not turn off.'
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-transparent')"
+    $blur = Step "(Get-LuilState (Wait-LuilElement -id 'backdrop-blur')).selected"
+    if ("$blur" -notmatch 'False') {
+        throw 'The blur choice stayed selected.'
     }
+    # 색 없는 흐림과 Acrylic도 고를 수 있다.
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-blur')"
+    $plain = Step "(Get-LuilState (Wait-LuilElement -id 'backdrop-blur')).selected"
+    if ("$plain" -notmatch 'True') {
+        throw 'The plain blur choice was not selected.'
+    }
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-acrylic')"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-transparent')"
     $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity')"
     $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '50%'"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-settings.png')'"
     # 진하기 100%는 DWM 합성을 끈 불투명 창이라 흐림 스위치가 할 일이 없다. 0%까지 내릴 수 있다.
     $null = Step "Set-LuilScroll -fraction 1 (Wait-LuilElement -id 'widget-opacity')"
     $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '100%'"
-    $blur_enabled = Step "(Wait-LuilElement -id 'widget-blur').Current.IsEnabled"
+    $blur_enabled = Step "(Wait-LuilElement -id 'widget-backdrop-mode').Current.IsEnabled"
     if ("$blur_enabled" -notmatch 'False') {
-        throw 'The blur switch stayed enabled at full opacity.'
+        throw 'The backdrop choice stayed enabled at full opacity.'
     }
     $null = Step "Set-LuilScroll -fraction 0 (Wait-LuilElement -id 'widget-opacity')"
     $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '0%'"
-    $blur_enabled = Step "(Wait-LuilElement -id 'widget-blur').Current.IsEnabled"
+    $blur_enabled = Step "(Wait-LuilElement -id 'widget-backdrop-mode').Current.IsEnabled"
     if ("$blur_enabled" -notmatch 'True') {
-        throw 'The blur switch stayed disabled below full opacity.'
+        throw 'The backdrop choice stayed disabled below full opacity.'
     }
     $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity')"
     $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '50%'"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
-    $null = Step "Wait-LuilElement -id 'widget-blur' -absent"
+    $null = Step "Wait-LuilElement -id 'widget-backdrop-mode' -absent"
 
     # 위젯의 테마 단추는 밝게·시스템·어둡게 카드와 키 컬러를 고르는 설정 줄을 펼친다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')"

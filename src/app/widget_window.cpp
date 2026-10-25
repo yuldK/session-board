@@ -27,6 +27,46 @@ namespace session_board {
             return TRUE;
         }
 
+        // 색 없는 흐림을 거는 Windows 비공개 API다 (user32의 SetWindowCompositionAttribute, WCA_ACCENT_POLICY).
+        //  - 공개 API(DWMWA_SYSTEMBACKDROP_TYPE)는 Acrylic의 색 막을 뺄 수 없어 이것을 쓴다.
+        //  - 모양은 널리 쓰이는 비공개 정의를 따른다. 없는 Windows에서는 함수가 비어 Acrylic으로 물러선다.
+        constexpr int accent_disabled { 0 };
+        constexpr int accent_blur_behind { 3 };
+        constexpr int window_composition_accent_policy { 19 };
+
+        struct accent_policy
+        {
+            int state { 0 };
+            int flags { 0 };
+            DWORD gradient { 0 };
+            int animation { 0 };
+        };
+
+        struct composition_data
+        {
+            int attribute { 0 };
+            void* data { nullptr };
+            SIZE_T size { 0 };
+        };
+
+        using set_composition = BOOL(WINAPI*)(HWND, composition_data*);
+
+        set_composition composition_function()
+        {
+            static const auto function { reinterpret_cast<set_composition>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetWindowCompositionAttribute")) };
+            return function;
+        }
+
+        void set_accent(const HWND window, const int state)
+        {
+            const auto function { composition_function() };
+            if (function == nullptr)
+                return;
+            accent_policy policy { .state = state };
+            composition_data data { .attribute = window_composition_accent_policy, .data = &policy, .size = sizeof(policy) };
+            function(window, &data);
+        }
+
         // 창 상태가 바뀌어 luil이 DWM 테두리를 다시 거는 메시지들이다.
         bool resets_composition(const UINT message) noexcept
         {
@@ -81,19 +121,21 @@ namespace session_board {
             return;
         // 100%면 비칠 자리가 없으므로 Acrylic도 알파 합성도 끈다. DWM이 뒤를 읽어 섞지 않는다.
         const bool opaque { fully_opaque(opacity_) };
-        const bool blur { backdrop_ == widget_backdrop::blur && !opaque };
-        // 흐림은 창 전체를 DWM 합성면으로 넓히고 Acrylic을 깐다. 그림이 투명한 자리마다 흐린 뒤가 보인다.
-        // 투명·불투명은 합성면을 넓히지 않는다 — 넓히면 DWM이 테마 색 판을 깔아 뒤가 비치지 않는다.
+        const bool plain { backdrop_ == widget_backdrop::blur && !opaque && composition_function() != nullptr };
+        const bool blur { backdrop_ != widget_backdrop::transparent && !opaque && !plain };
+        // Acrylic은 창 전체를 DWM 합성면으로 넓히고 깐다. 그림이 투명한 자리마다 흐린 뒤가 보인다.
+        // 투명·색 없는 흐림·불투명은 합성면을 넓히지 않는다 — 넓히면 DWM이 테마 색 판을 깔아 뒤가 비치지 않는다.
         const MARGINS margins { blur ? MARGINS { -1, -1, -1, -1 } : MARGINS {} };
         DwmExtendFrameIntoClientArea(window_, &margins);
         const DWM_SYSTEMBACKDROP_TYPE type { blur ? DWMSBT_TRANSIENTWINDOW : DWMSBT_NONE };
         DwmSetWindowAttribute(window_, DWMWA_SYSTEMBACKDROP_TYPE, &type, sizeof(type));
-        // 빈 흐림 영역으로 blur-behind를 켜면 흐림 없이 그림의 알파대로만 합성한다.
+        // 빈 흐림 영역으로 blur-behind를 켜면 흐림 없이 그림의 알파대로만 합성한다. 색 없는 흐림도 이 위에 흐림만 더한다.
         const HRGN empty { CreateRectRgn(0, 0, -1, -1) };
         const DWM_BLURBEHIND behind { .dwFlags = DWM_BB_ENABLE | DWM_BB_BLURREGION, .fEnable = blur || opaque ? FALSE : TRUE, .hRgnBlur = empty };
         DwmEnableBlurBehindWindow(window_, &behind);
         if (empty != nullptr)
             DeleteObject(empty);
+        set_accent(window_, plain ? accent_blur_behind : accent_disabled);
         // 비치는 가장자리에 OS 테두리 선이 남지 않게 한다.
         const COLORREF border { DWMWA_COLOR_NONE };
         DwmSetWindowAttribute(window_, DWMWA_BORDER_COLOR, &border, sizeof(border));
