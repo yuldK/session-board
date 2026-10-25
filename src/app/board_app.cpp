@@ -1220,7 +1220,7 @@ namespace session_board {
             error_ = "The widget window could not be prepared.";
         else if (const auto* detail { message.get<open_detail_intent>() }; detail != nullptr)
         {
-            detail_open_ = !detail_open_ || !detail->key.empty();
+            detail_open_ = !detail_open_ || !detail->key.empty() || detail->keep_open;
             if (!detail->key.empty())
                 selected_session_ = detail->key;
         }
@@ -1912,6 +1912,8 @@ namespace session_board {
         }
         if (instance_ != nullptr)
             instance_->bind_window(window_.handle());
+        // 위젯은 작업 표시줄에 서지 않으므로 숨기거나 끝낼 자리를 알림 영역에 둔다.
+        tray_.attach(window_.handle(), [&host] { host.post_app_message(luil::app_message { open_detail_intent { .keep_open = true } }); });
     }
 
     luil::app_message board_delegate::make_window_placement_message(const luil::win32::window_placement& placement)

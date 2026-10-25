@@ -1,6 +1,7 @@
 #pragma once
 
 #include "app/single_instance.h"
+#include "app/tray_icon.h"
 #include "app/widget_window.h"
 #include "core/claude_desktop.h"
 #include "core/claude_hooks.h"
@@ -78,6 +79,8 @@ namespace session_board {
     struct open_detail_intent
     {
         std::u8string key {};
+        // 참이면 이미 열려 있어도 닫지 않는다. 트레이 메뉴는 열린 상태를 모르고 연다.
+        bool keep_open { false };
     };
     struct close_detail_intent
     {};
@@ -225,6 +228,7 @@ namespace session_board {
 
     private:
         widget_window window_ {};
+        tray_icon tray_ {};
         std::filesystem::path placement_file_ {};
         bool restored_ { false };
         widget_appearance appearance_ {};

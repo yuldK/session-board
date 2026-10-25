@@ -41,6 +41,7 @@ luil_configure_resource_script("${CMAKE_BINARY_DIR}/generated/luil_resources.rc"
 
 add_executable(session_board WIN32 src/app/main.cpp src/app/resource.h src/app/board_app.cpp src/app/board_app.h src/app/widget_window.cpp src/app/widget_window.h
     src/app/single_instance.cpp src/app/single_instance.h
+    src/app/tray_icon.cpp src/app/tray_icon.h
     resources/session_board.rc "${CMAKE_BINARY_DIR}/generated/luil_resources.rc")
 set_target_properties(session_board PROPERTIES OUTPUT_NAME session-board)
 target_include_directories(session_board PRIVATE "${PROJECT_SOURCE_DIR}/assets")
