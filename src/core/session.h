@@ -97,6 +97,9 @@ namespace session_board {
         std::uint64_t host_window { 0 };
         std::uint32_t host_process_id { 0 };
         std::vector<session_child> children {};
+        // 데스크톱 앱에서 이 세션을 여는 ID다. 저장하지 않고 로컬 기록을 읽을 때마다 채운다.
+        //  - Claude는 데스크톱이 붙인 `local_…` ID, Codex는 데스크톱 앱이 연 스레드의 세션 ID 그대로다.
+        std::string desktop_session_id {};
     };
 
     [[nodiscard]] std::int64_t now_ms();

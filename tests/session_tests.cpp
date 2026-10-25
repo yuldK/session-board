@@ -336,6 +336,20 @@ namespace session_board {
             codex_rollout child {};
             child.consume(record("session_meta", { { "id", "child-thread" }, { "source", { { "subagent", "parent" } } } }));
             require(!child.root_session(), "Subagent was exposed as root session.");
+
+            // 데스크톱 앱이 연 스레드만 앱 주소로 연다. CLI 스레드는 창 이동에 맡긴다.
+            const std::string thread { "01a172a5-0e1d-7fa0-ad2e-3dfbf33ced95" };
+            codex_rollout desktop {};
+            desktop.consume(record("session_meta", { { "id", thread }, { "originator", "Codex Desktop" }, { "source", "vscode" } }));
+            require(desktop.snapshot().desktop_session_id == thread, "Desktop thread not marked.");
+            codex_rollout terminal {};
+            terminal.consume(record("session_meta", { { "id", thread }, { "originator", "codex_cli_rs" }, { "source", "cli" } }));
+            require(terminal.snapshot().desktop_session_id.empty(), "CLI thread marked as desktop.");
+            merged = { terminal.snapshot() };
+            merge_codex_sessions(merged, { desktop.snapshot() });
+            require(merged.front().desktop_session_id == thread, "Desktop thread lost on merge.");
+            require(codex_desktop_link(thread) == L"codex://threads/01a172a5-0e1d-7fa0-ad2e-3dfbf33ced95", "Codex link differs.");
+            require(codex_desktop_link("live-thread").empty() && codex_desktop_link("01a172a5-0e1d-7fa0-ad2e-3dfbf33ced9/").empty(), "Invalid Codex link built.");
         }
 
         void codex_discovery(const std::filesystem::path& directory)

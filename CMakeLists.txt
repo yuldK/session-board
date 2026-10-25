@@ -25,6 +25,7 @@ target_link_options(session_board_options INTERFACE $<$<CONFIG:Release>:/OPT:REF
 
 add_library(session_board_core STATIC src/core/session.cpp src/core/session.h src/core/store.cpp src/core/store.h src/core/codex_monitor.cpp src/core/codex_monitor.h
     src/core/claude_monitor.cpp src/core/claude_monitor.h
+    src/core/claude_desktop.cpp src/core/claude_desktop.h
     src/core/claude_hooks.cpp src/core/claude_hooks.h
     src/core/codex_hooks.cpp src/core/codex_hooks.h src/core/hook_installation.h
     src/core/host_window.cpp src/core/host_window.h)

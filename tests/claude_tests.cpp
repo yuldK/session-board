@@ -1,3 +1,4 @@
+#include "core/claude_desktop.h"
 #include "core/claude_hooks.h"
 #include "core/claude_monitor.h"
 #include "core/store.h"
@@ -469,6 +470,33 @@ namespace session_board {
             const auto crlf { file_text(fresh / "settings.json") };
             require(result.changed && crlf.find("\r\n") != std::string::npos && crlf.find("\r\r") == std::string::npos && crlf.find('\n') == crlf.find("\r\n") + 1, "CRLF settings not preserved.");
         }
+
+        void desktop_index(const std::filesystem::path& directory)
+        {
+            const auto root { directory / "desktop" / "claude-code-sessions" };
+            const auto folder { root / "account" / "organization" };
+            std::filesystem::create_directories(folder);
+            const auto write = [&](const std::string& name, const nlohmann::json& value) { std::ofstream { folder / name, std::ios::binary } << value.dump(); };
+            write("local_11111111-2222-3333-4444-555555555555.json", { { "sessionId", "local_11111111-2222-3333-4444-555555555555" }, { "cliSessionId", session_id }, { "isArchived", false } });
+            write("local_archived.json", { { "sessionId", "local_archived" }, { "cliSessionId", "archived-cli" }, { "isArchived", true } });
+            write("local_bad.json", { { "sessionId", "local_bad id" }, { "cliSessionId", "bad-cli" } });
+            std::ofstream { folder / "local_broken.json", std::ios::binary } << "{ \"sessionId\": ";
+            // 정해진 깊이 밖의 기록은 읽지 않는다.
+            std::ofstream { root / "local_shallow.json", std::ios::binary } << nlohmann::json { { "sessionId", "local_shallow" }, { "cliSessionId", "shallow-cli" } }.dump();
+
+            claude_desktop_index index { { root, directory / "missing" } };
+            index.refresh();
+            require(index.find(session_id) == "local_11111111-2222-3333-4444-555555555555", "Desktop session not mapped.");
+            require(index.find("archived-cli").empty(), "Archived desktop session mapped.");
+            require(index.find("bad-cli").empty(), "Malformed desktop ID mapped.");
+            require(index.find("shallow-cli").empty() && index.find("").empty(), "Unexpected desktop mapping.");
+            require(claude_desktop_link("local_11111111-2222-3333-4444-555555555555") == L"claude://code/continue?session=local_11111111-2222-3333-4444-555555555555", "Desktop link differs.");
+            require(claude_desktop_link("local_bad id").empty() && claude_desktop_link(session_id).empty(), "Invalid desktop link built.");
+
+            std::filesystem::remove(folder / "local_11111111-2222-3333-4444-555555555555.json");
+            index.refresh();
+            require(index.find(session_id).empty(), "Removed desktop session still mapped.");
+        }
     } // namespace
 } // namespace session_board
 
@@ -485,6 +513,7 @@ int main()
         session_board::merging();
         session_board::discovery(directory);
         session_board::hook_registration(directory);
+        session_board::desktop_index(directory);
         std::filesystem::remove_all(directory);
         std::cout << session_board::assertions << " Claude assertions passed.\n";
         return 0;

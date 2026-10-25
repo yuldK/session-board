@@ -2,6 +2,7 @@
 
 #include "app/single_instance.h"
 #include "app/widget_window.h"
+#include "core/claude_desktop.h"
 #include "core/claude_hooks.h"
 #include "core/claude_monitor.h"
 #include "core/codex_hooks.h"
@@ -131,6 +132,9 @@ namespace session_board {
         std::filesystem::path claude_directory_ {};
         std::unique_ptr<claude_monitor> claude_ {};
         claude_observation claude_data_ {};
+        // Claude 데스크톱이 연 세션의 색인이다. 이동 단추가 창 대신 그 세션을 연다.
+        std::unique_ptr<claude_desktop_index> desktop_ {};
+        std::chrono::steady_clock::time_point desktop_refresh_ {};
         // 앱 시작 때 시도한 Claude Hook 자동 등록 결과다. 시도하지 않은 실행에서는 비어 있다.
         std::optional<claude_hook_result> claude_hooks_ {};
         std::optional<codex_hook_result> codex_hooks_ {};

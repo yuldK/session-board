@@ -5,6 +5,8 @@
 #include <condition_variable>
 #include <filesystem>
 #include <mutex>
+#include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -34,6 +36,8 @@ namespace session_board {
     [[nodiscard]] std::filesystem::path default_codex_directory();
     [[nodiscard]] bool codex_writer_active(const std::filesystem::path& lock_file);
     void merge_codex_sessions(std::vector<session_snapshot>& sessions, const std::vector<session_snapshot>& observed);
+    // Codex 데스크톱 앱에서 그 스레드를 여는 `codex://threads/` 주소다. 스레드 ID가 UUID 꼴이 아니면 비어 있다.
+    [[nodiscard]] std::wstring codex_desktop_link(std::string_view thread_id);
 
     class codex_monitor final
     {

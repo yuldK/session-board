@@ -245,6 +245,8 @@ namespace session_board {
             root_ = source == payload.end() || !source->is_object();
             snapshot_.provider = "codex";
             snapshot_.session_id = text_field(payload, "id", 512);
+            // Codex 데스크톱 앱이 연 스레드만 앱에서 바로 연다. CLI·IDE 세션은 그 창을 앞으로 가져와야 한다.
+            snapshot_.desktop_session_id = text_field(payload, "originator", 64) == "Codex Desktop" ? snapshot_.session_id : std::string {};
             snapshot_.cwd = text_field(payload, "cwd", 4096);
             snapshot_.observation_source = "codex-local";
             snapshot_.updated_ms = record_time(record);
@@ -379,6 +381,22 @@ namespace session_board {
             UnlockFileEx(file, 0, 1, 0, &overlapped);
         CloseHandle(file);
         return !free && error == ERROR_LOCK_VIOLATION;
+    }
+
+    std::wstring codex_desktop_link(const std::string_view thread_id)
+    {
+        constexpr std::array<std::size_t, 4> dashes { 8, 13, 18, 23 };
+        if (thread_id.size() != 36)
+            return {};
+        for (std::size_t index { 0 }; index < thread_id.size(); ++index)
+        {
+            const char character { thread_id[index] };
+            const bool dash { std::ranges::find(dashes, index) != dashes.end() };
+            const bool hex { (character >= '0' && character <= '9') || (character >= 'a' && character <= 'f') || (character >= 'A' && character <= 'F') };
+            if (dash ? character != '-' : !hex)
+                return {};
+        }
+        return L"codex://threads/" + std::wstring { thread_id.begin(), thread_id.end() };
     }
 
     void merge_codex_sessions(std::vector<session_snapshot>& sessions, const std::vector<session_snapshot>& observed)

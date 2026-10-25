@@ -127,6 +127,31 @@ namespace session_board {
             return result;
         }
 
+        // 데스크톱 앱에서 그 세션을 여는 주소다. 데스크톱 앱이 연 세션이 아니면 비어 있다.
+        std::wstring desktop_link(const session_snapshot& session)
+        {
+            if (session.provider == "claude")
+                return claude_desktop_link(session.desktop_session_id);
+            if (session.provider == "codex" && !session.desktop_session_id.empty())
+                return codex_desktop_link(session.desktop_session_id);
+            return {};
+        }
+
+        // 이동 단추가 할 수 있는 일이다. 데스크톱 세션이면 앱에서 그 세션을 열고, 아니면 Hook이 기록한 창을 앞으로 가져온다.
+        bool can_focus(const session_snapshot& session)
+        {
+            return !desktop_link(session).empty() || session.host_window != 0;
+        }
+
+        std::u8string focus_tooltip(const session_snapshot& session, const std::u8string_view window_text)
+        {
+            if (!desktop_link(session).empty())
+                return session.provider == "claude" ? u8"Claude 데스크톱에서 이 세션을 엽니다" : u8"Codex 앱에서 이 스레드를 엽니다";
+            if (session.host_window != 0)
+                return std::u8string { window_text };
+            return u8"창 정보가 없습니다 — Hook으로 받은 세션과 데스크톱 앱 세션만 이동할 수 있습니다";
+        }
+
         std::u8string state_text(const session_snapshot& session, const std::int64_t now)
         {
             if (needs_attention(session, now))
@@ -610,8 +635,8 @@ namespace session_board {
             const luil::text_button_config focus_config { .text = u8"세션 창으로 이동", .visual = luil::text_button_visual::accent, .glyph = luil::codicons::icon_link_external };
             auto focus { std::make_unique<luil::text_button_element>(luil::ui_element_id { kind_button, u8"detail-focus" }, focus_config) };
             focus->set_cursor(luil::ui_cursor::hand);
-            focus->set_tooltip(session.host_window == 0 ? u8"창 정보가 없습니다 — Hook으로 받은 세션만 이동할 수 있습니다" : u8"이 세션이 열린 Claude Code·Codex 창을 앞으로 가져옵니다");
-            focus->set_enabled(session.host_window != 0);
+            focus->set_tooltip(focus_tooltip(session, u8"이 세션이 열린 Claude Code·Codex 창을 앞으로 가져옵니다"));
+            focus->set_enabled(can_focus(session));
             focus->set_action(luil::ui_trigger::left_click, luil::make_message_action(focus_session_intent { session_key(session) }));
             actions->add_fit(std::move(focus));
             if (!session.cwd.empty())
@@ -683,8 +708,8 @@ namespace session_board {
             const luil::text_button_config focus_config { .text = u8"부모 세션 창으로 이동", .visual = luil::text_button_visual::accent, .glyph = luil::codicons::icon_link_external };
             auto focus { std::make_unique<luil::text_button_element>(luil::ui_element_id { kind_button, u8"detail-focus" }, focus_config) };
             focus->set_cursor(luil::ui_cursor::hand);
-            focus->set_tooltip(session.host_window == 0 ? u8"창 정보가 없습니다 — Hook으로 받은 세션만 이동할 수 있습니다" : u8"이 하위를 띄운 세션의 창을 앞으로 가져옵니다");
-            focus->set_enabled(session.host_window != 0);
+            focus->set_tooltip(focus_tooltip(session, u8"이 하위를 띄운 세션의 창을 앞으로 가져옵니다"));
+            focus->set_enabled(can_focus(session));
             focus->set_action(luil::ui_trigger::left_click, luil::make_message_action(focus_session_intent { session_key(session) }));
             actions->add_fit(std::move(focus));
             const luil::text_button_config copy_config { .text = u8"ID 복사", .glyph = luil::codicons::icon_copy };
@@ -854,10 +879,9 @@ namespace session_board {
             top->add(status_cell(owner + u8"-status", session, now), 112.0f);
             top->add_flexible(label(owner + u8"-source", provider_text(session) + u8" · " + project_text(session), 11.0f, luil::label_color_role::dim));
             top->add_fit(label(owner + u8"-age", age_text(latest_update(session), now), 11.0f, luil::label_color_role::dim));
-            const bool known { session.host_window != 0 };
-            const std::u8string focus_name { known ? provider_text(session) + u8" 세션 창으로 이동" : u8"창 정보가 없습니다 — Hook으로 받은 세션만 이동할 수 있습니다" };
+            const std::u8string focus_name { focus_tooltip(session, provider_text(session) + u8" 세션 창으로 이동") };
             auto focus { widget_button(owner + u8"-focus", focus_name, luil::codicons::icon_link_external, luil::make_message_action(focus_session_intent { session_key(session) })) };
-            focus->set_enabled(known);
+            focus->set_enabled(can_focus(session));
             top->add(std::move(focus), { .length = widget_icon_button, .cross_length = widget_icon_button });
             content->add(std::move(top), widget_icon_button);
             content->add_gap(2.0f);
@@ -959,7 +983,10 @@ namespace session_board {
         if (!codex_directory_.empty())
             codex_ = std::make_unique<codex_monitor>(codex_directory_);
         if (!claude_directory_.empty())
+        {
             claude_ = std::make_unique<claude_monitor>(claude_directory_);
+            desktop_ = std::make_unique<claude_desktop_index>(default_claude_desktop_roots());
+        }
         try
         {
             std::filesystem::create_directories(directory_);
@@ -993,6 +1020,19 @@ namespace session_board {
         {
             claude_data_ = claude_->snapshot();
             merge_claude_sessions(data_.sessions, claude_data_.sessions);
+        }
+        if (desktop_ != nullptr)
+        {
+            // 데스크톱 기록은 대화가 이어지는 동안 자주 바뀐다. 바뀐 파일만 읽지만 훑는 것도 몇 초에 한 번이면 된다.
+            const auto now { std::chrono::steady_clock::now() };
+            if (now >= desktop_refresh_)
+            {
+                desktop_->refresh();
+                desktop_refresh_ = now + std::chrono::seconds { 3 };
+            }
+            for (auto& session : data_.sessions)
+                if (session.provider == "claude")
+                    session.desktop_session_id = desktop_->find(session.session_id);
         }
     }
 
@@ -1064,8 +1104,17 @@ namespace session_board {
         notice_until_ = std::chrono::steady_clock::now() + std::chrono::seconds { 8 };
         if (found == data_.sessions.end())
             notice_ = u8"세션을 찾지 못했습니다. 목록이 바뀌었을 수 있습니다.";
+        // 데스크톱 세션은 창을 앞으로 가져와도 다른 세션이 보일 수 있어 앱에 그 세션을 열라고 한다.
+        else if (const auto link { desktop_link(*found) }; !link.empty())
+        {
+            const auto result { reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", link.c_str(), nullptr, nullptr, SW_SHOWNORMAL)) };
+            if (result > 32)
+                notice_.clear();
+            else
+                notice_ = provider_text(*found) + u8" 앱에서 세션을 열지 못했습니다.";
+        }
         else if (found->host_window == 0)
-            notice_ = u8"이 세션의 창 정보가 없습니다 — Hook으로 받은 세션만 이동할 수 있습니다.";
+            notice_ = u8"이 세션의 창 정보가 없습니다 — Hook으로 받은 세션과 데스크톱 앱 세션만 이동할 수 있습니다.";
         else if (!focus_host_window({ .window = found->host_window, .process_id = found->host_process_id }))
             notice_ = u8"세션 창을 찾지 못했습니다 — 창이 닫혔을 수 있습니다.";
         else
