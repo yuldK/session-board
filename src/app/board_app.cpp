@@ -237,6 +237,25 @@ namespace session_board {
             return value;
         }
 
+        // 쓰다 끊겨도 옛 파일이 남도록 임시 파일을 다 쓴 뒤 바꿔 끼운다. 실패는 삼킨다.
+        void write_json_file(const std::filesystem::path& file, const nlohmann::json& value) noexcept
+        {
+            try
+            {
+                std::filesystem::create_directories(file.parent_path());
+                const std::filesystem::path temporary { file.wstring() + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp" };
+                {
+                    std::ofstream output { temporary, std::ios::binary | std::ios::trunc };
+                    output << value.dump();
+                    if (!output)
+                        return;
+                }
+                MoveFileExW(temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+            }
+            catch (...)
+            {}
+        }
+
         std::unique_ptr<luil::panel_element> panel(const std::u8string& id, std::unique_ptr<luil::ui_element> content)
         {
             luil::panel_config config {};
@@ -1081,14 +1100,21 @@ namespace session_board {
     }
 
     board_driver::board_driver(std::filesystem::path directory, const bool open_detail, std::filesystem::path codex_directory, std::filesystem::path claude_directory,
-        std::optional<claude_hook_result> claude_hooks, std::optional<codex_hook_result> codex_hooks, std::filesystem::path detail_placement_file)
+        std::optional<claude_hook_result> claude_hooks, std::optional<codex_hook_result> codex_hooks, std::filesystem::path detail_placement_file, widget_appearance appearance,
+        std::filesystem::path appearance_file)
         : directory_ { std::move(directory) }
         , codex_directory_ { std::move(codex_directory) }
         , claude_directory_ { std::move(claude_directory) }
         , claude_hooks_ { std::move(claude_hooks) }
         , codex_hooks_ { std::move(codex_hooks) }
+        , dark_ { appearance.dark }
         , detail_open_ { open_detail }
+        , accent_id_ { appearance.accent_id }
+        , backdrop_ { appearance.backdrop }
+        , opacity_ { appearance.opacity }
         , detail_placement_file_ { std::move(detail_placement_file) }
+        , appearance_file_ { std::move(appearance_file) }
+        , saved_appearance_ { std::move(appearance) }
     {
         if (!detail_placement_file_.empty())
             detail_placement_ = load_window_placement(detail_placement_file_);
@@ -1166,7 +1192,10 @@ namespace session_board {
     void board_driver::handle(luil::app_message message)
     {
         if (message.get<close_intent>() != nullptr)
+        {
+            save_appearance();
             closed_.store(true);
+        }
         else if (const auto* metrics { message.get<metrics_intent>() }; metrics != nullptr)
             metrics_ = *metrics;
         else if (message.get<refresh_intent>() != nullptr)
@@ -1281,7 +1310,19 @@ namespace session_board {
             FindNextChangeNotification(changes_);
             reload();
         }
+        save_appearance();
         next_tick_ = now + std::chrono::seconds { 1 };
+    }
+
+    void board_driver::save_appearance()
+    {
+        if (appearance_file_.empty())
+            return;
+        const widget_appearance current { .dark = dark_, .accent_id = accent_id_, .backdrop = backdrop_, .opacity = opacity_ };
+        if (current == saved_appearance_)
+            return;
+        save_widget_appearance(appearance_file_, current);
+        saved_appearance_ = current;
     }
 
     std::shared_ptr<const luil::ui_frame> board_driver::make_frame()
@@ -1802,29 +1843,68 @@ namespace session_board {
             nlohmann::json value { { "x", placement.x }, { "y", placement.y }, { "width", placement.width }, { "height", placement.height } };
             if (placement.maximized)
                 value["maximized"] = true;
-            std::filesystem::create_directories(file.parent_path());
-            // 쓰다 끊겨도 옛 파일이 남도록 임시 파일을 다 쓴 뒤 바꿔 끼운다.
-            const std::filesystem::path temporary { file.wstring() + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp" };
-            {
-                std::ofstream output { temporary, std::ios::binary | std::ios::trunc };
-                output << value.dump();
-                if (!output)
-                    return;
-            }
-            MoveFileExW(temporary.c_str(), file.c_str(), MOVEFILE_REPLACE_EXISTING);
+            write_json_file(file, value);
         }
         catch (...)
         {}
     }
 
-    board_delegate::board_delegate(std::filesystem::path placement_file, const bool restored, single_instance* instance)
+    widget_appearance load_widget_appearance(const std::filesystem::path& file)
+    {
+        widget_appearance result {};
+        try
+        {
+            std::ifstream input { file, std::ios::binary };
+            if (!input)
+                return result;
+            const auto value { nlohmann::json::parse(input) };
+            if (const auto theme { value.find("theme") }; theme != value.end() && theme->is_string())
+                result.dark = theme->get<std::string>() != "light";
+            // 목록에 없는 id로 두면 표시만 기본색으로 물러서고 견본은 아무것도 고르지 않은 채가 된다.
+            if (const auto accent { value.find("accent") }; accent != value.end() && accent->is_string())
+                if (const auto id { u8(accent->get<std::string>()) }; luil::accent_exists(id))
+                    result.accent_id = id;
+            if (const auto backdrop { value.find("backdrop") }; backdrop != value.end() && backdrop->is_string())
+                result.backdrop = backdrop->get<std::string>() == "transparent" ? widget_backdrop::transparent : widget_backdrop::blur;
+            if (const auto opacity { value.find("opacity") }; opacity != value.end() && opacity->is_number())
+                if (const auto level { opacity->get<float>() }; std::isfinite(level))
+                    result.opacity = std::clamp(level, 0.0f, 1.0f);
+            return result;
+        }
+        catch (...)
+        {
+            return {};
+        }
+    }
+
+    void save_widget_appearance(const std::filesystem::path& file, const widget_appearance& appearance) noexcept
+    {
+        try
+        {
+            const nlohmann::json value {
+                { "theme", appearance.dark ? "dark" : "light" },
+                { "accent", std::string { appearance.accent_id.begin(), appearance.accent_id.end() } },
+                { "backdrop", appearance.backdrop == widget_backdrop::transparent ? "transparent" : "blur" },
+                { "opacity", appearance.opacity },
+            };
+            write_json_file(file, value);
+        }
+        catch (...)
+        {}
+    }
+
+    board_delegate::board_delegate(std::filesystem::path placement_file, const bool restored, single_instance* instance, widget_appearance appearance)
         : placement_file_ { std::move(placement_file) }
         , restored_ { restored }
+        , appearance_ { std::move(appearance) }
         , instance_ { instance }
     {}
 
     void board_delegate::on_started(luil::app_host& host)
     {
+        // 창을 붙이기 전에 값만 둔다. 붙일 때 이 값으로 합성을 처음 건다.
+        window_.set_backdrop(appearance_.backdrop);
+        window_.set_opacity(appearance_.opacity);
         if (!window_.attach(restored_))
         {
             host.post_app_message(luil::app_message { widget_failed_intent {} });

@@ -78,10 +78,14 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         // 테스트 데이터로 연 실행은 사용자의 위젯 자리를 바꾸지 않는다. `--position`을 주면 저장한 자리보다 앞선다.
         std::filesystem::path placement_file {};
         std::filesystem::path detail_placement_file {};
+        std::filesystem::path appearance_file {};
+        session_board::widget_appearance appearance {};
         if (!custom_data)
         {
             placement_file = directory.parent_path() / (L"widget-" + std::wstring { session_board::build_flavor() } + L".json");
             detail_placement_file = directory.parent_path() / (L"detail-" + std::wstring { session_board::build_flavor() } + L".json");
+            appearance_file = directory.parent_path() / (L"appearance-" + std::wstring { session_board::build_flavor() } + L".json");
+            appearance = session_board::load_widget_appearance(appearance_file);
         }
         if (!placement_file.empty() && !config.initial_position.has_value())
             config.initial_placement = session_board::load_window_placement(placement_file);
@@ -118,8 +122,10 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
             std::move(hook_result),
             std::move(codex_hook_result),
             std::move(detail_placement_file),
+            appearance,
+            std::move(appearance_file),
         };
-        session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance };
+        session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance, std::move(appearance) };
         session_board::board_policy policy {};
         luil::win32::window_environment environment {};
         environment.driver = &driver;

@@ -110,6 +110,22 @@ namespace session_board {
         luil::win32::window_placement placement {};
     };
 
+    // 위젯 외양이다. 다음 실행에 그대로 되살린다.
+    struct widget_appearance
+    {
+        bool dark { true };
+        std::u8string accent_id { luil::default_accent_id };
+        widget_backdrop backdrop { widget_backdrop::blur };
+        float opacity { widget_default_opacity };
+
+        [[nodiscard]] bool operator==(const widget_appearance&) const = default;
+    };
+
+    // 없거나 깨진 항목, 목록에 없는 키 컬러는 기본값으로 물러선다. 파일이 없으면 모두 기본값이다.
+    [[nodiscard]] widget_appearance load_widget_appearance(const std::filesystem::path& file);
+    // 실패해도 위젯 동작을 막지 않는다. 다음에 바뀔 때 다시 쓴다.
+    void save_widget_appearance(const std::filesystem::path& file, const widget_appearance& appearance) noexcept;
+
     // 창(위젯·상세)의 마지막 자리와 크기다. 값이 없거나 깨졌으면 빈 값이라 기본 자리로 연다.
     [[nodiscard]] std::optional<luil::win32::window_placement> load_window_placement(const std::filesystem::path& file);
     // 실패해도 창 동작을 막지 않는다. 다음 이동 때 다시 쓴다.
@@ -123,7 +139,8 @@ namespace session_board {
     {
     public:
         explicit board_driver(std::filesystem::path directory, bool open_detail = false, std::filesystem::path codex_directory = {}, std::filesystem::path claude_directory = {},
-            std::optional<claude_hook_result> claude_hooks = std::nullopt, std::optional<codex_hook_result> codex_hooks = std::nullopt, std::filesystem::path detail_placement_file = {});
+            std::optional<claude_hook_result> claude_hooks = std::nullopt, std::optional<codex_hook_result> codex_hooks = std::nullopt, std::filesystem::path detail_placement_file = {},
+            widget_appearance appearance = {}, std::filesystem::path appearance_file = {});
         ~board_driver() override;
         void start() override;
         void handle(luil::app_message message) override;
@@ -135,6 +152,8 @@ namespace session_board {
 
     private:
         void reload();
+        // 외양이 마지막으로 저장한 값과 다르면 저장한다. 진하기를 끄는 동안 쓰기가 몰리지 않게 tick과 종료 때만 부른다.
+        void save_appearance();
         // 주 창(위젯)의 tree다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_widget_tree(std::int64_t now);
         // 상세 창의 tree다. 보조 창 client의 (0,0)에서 시작한다.
@@ -180,6 +199,9 @@ namespace session_board {
         //  - 파일이 비어 있으면 저장하지 않는다 (테스트 데이터로 연 실행). 그래도 이번 실행 안에서는 다시 열 때 쓴다.
         std::filesystem::path detail_placement_file_ {};
         std::optional<luil::win32::window_placement> detail_placement_ {};
+        // 비어 있으면 외양을 저장하지 않는다 (테스트 데이터로 연 실행).
+        std::filesystem::path appearance_file_ {};
+        widget_appearance saved_appearance_ {};
         std::u8string expanded_session_ {};
         std::u8string selected_session_ {};
         float scroll_ { 0.0f };
@@ -194,7 +216,8 @@ namespace session_board {
     public:
         // `placement_file`이 비어 있으면 자리를 저장하지 않는다 (테스트 데이터로 연 실행).
         // `restored`는 저장한 자리로 연 실행이다.
-        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance);
+        // `appearance`의 흐림·진하기로 위젯 창의 DWM 합성을 처음부터 맞춘다.
+        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance, widget_appearance appearance = {});
         void on_started(luil::app_host& host) override;
         void execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command) override;
         [[nodiscard]] luil::app_message make_window_metrics_message(float width, float height, float scale) override;
@@ -204,6 +227,7 @@ namespace session_board {
         widget_window window_ {};
         std::filesystem::path placement_file_ {};
         bool restored_ { false };
+        widget_appearance appearance_ {};
         single_instance* instance_ { nullptr };
     };
 
