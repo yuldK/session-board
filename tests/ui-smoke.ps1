@@ -172,8 +172,38 @@ try {
     $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity')"
     $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '50%'"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-settings.png')'"
+    # 진하기 100%는 DWM 합성을 끈 불투명 창이라 흐림 스위치가 할 일이 없다. 0%까지 내릴 수 있다.
+    $null = Step "Set-LuilScroll -fraction 1 (Wait-LuilElement -id 'widget-opacity')"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '100%'"
+    $blur_enabled = Step "(Wait-LuilElement -id 'widget-blur').Current.IsEnabled"
+    if ("$blur_enabled" -notmatch 'False') {
+        throw 'The blur switch stayed enabled at full opacity.'
+    }
+    $null = Step "Set-LuilScroll -fraction 0 (Wait-LuilElement -id 'widget-opacity')"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '0%'"
+    $blur_enabled = Step "(Wait-LuilElement -id 'widget-blur').Current.IsEnabled"
+    if ("$blur_enabled" -notmatch 'True') {
+        throw 'The blur switch stayed disabled below full opacity.'
+    }
+    $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity')"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '50%'"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
     $null = Step "Wait-LuilElement -id 'widget-blur' -absent"
+
+    # 위젯의 테마 단추는 밝기와 키 컬러를 고르는 설정 줄을 펼친다.
+    $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'widget-accent/violet')"
+    $accent = Step "(Get-LuilState (Wait-LuilElement -id 'widget-accent/violet')).selected"
+    if ("$accent" -notmatch 'True') {
+        throw 'The accent swatch was not selected.'
+    }
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-light')"
+    $null = Step "Wait-LuilElement -id 'theme' -name '어둡게' -all_surfaces"
+    $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-theme.png')'"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-dark')"
+    $null = Step "Wait-LuilElement -id 'theme' -name '밝게' -all_surfaces"
+    $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')"
+    $null = Step "Wait-LuilElement -id 'widget-accent' -absent"
 
     $null = Step "Wait-LuilElement -id 'compact-$codex_owner' -search 'Codex.*응답 완료.*UI 실시간 갱신'"
     Send-Codex 'SessionEnd'
@@ -228,7 +258,7 @@ while ($true) {
     # 위젯의 상세 화면 단추는 상세 창을 닫기도 한다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-detail')"
     $null = Step "Wait-LuilElement -id 'filter-all' -all_surfaces -absent"
-    Write-Output 'UI smoke passed (isolated desktop): widget-first start, detail window, live updates, filters, themes, backdrop, end retention, expand/collapse, pin, resize grip, focus button state and scroll.'
+    Write-Output 'UI smoke passed (isolated desktop): widget-first start, detail window, live updates, filters, themes, accent, opacity range, backdrop, end retention, expand/collapse, pin, resize grip, focus button state and scroll.'
     Get-ChildItem -LiteralPath $data_directory -Filter '*.png' | ForEach-Object FullName
 }
 finally {

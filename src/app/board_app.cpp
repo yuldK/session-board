@@ -3,12 +3,18 @@
 #include "core/host_window.h"
 #include "luil/generated/codicons.h"
 
+#include "include/core/SkCanvas.h"
+#include "include/core/SkPaint.h"
+#include "include/core/SkPath.h"
+#include "include/utils/SkParsePath.h"
+
 #include <nlohmann/json.hpp>
 
 #include <shellapi.h>
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <cmath>
 #include <fstream>
 #include <functional>
@@ -115,6 +121,121 @@ namespace session_board {
         private:
             std::function<void(luil::ui_color_palette&)> tint_ {};
         };
+
+        // Simple Icons(CC0)의 Claude·OpenAI 표식 경로다 (24×24 viewBox).
+        constexpr char claude_mark_path[] = "m4.7144 15.9555 4.7174-2.6471.079-.2307-.079-.1275h-.2307l-.7893-.0486-2.6956-.0729-2.3375-.0971-2.2646-.1214-.5707-.1215-.5343-.7042.0546-.3522.4797-"
+                                            ".3218.686.0608 1.5179.1032 2.2767.1578 1.6514.0972 2.4468.255h.3886l.0546-.1579-.1336-.0971-.1032-.0972L6.973 9.8356l-2.55-1.6879-1.3356-.9714-.7225-."
+                                            "4918-.3643-.4614-.1578-1.0078.6557-.7225.8803.0607.2246.0607.8925.686 1.9064 1.4754 2.4893 1.8336.3643.3035.1457-.1032.0182-.0728-.164-.2733-1.3539-2."
+                                            "4467-1.445-2.4893-.6435-1.032-.17-.6194c-.0607-.255-.1032-.4674-.1032-.7285L6.287.1335 6.6997 0l.9957.1336.419.3642.6192 1.4147 1.0018 2.2282 1.5543 3"
+                                            ".0296.4553.8985.2429.8318.091.255h.1579v-.1457l.1275-1.706.2368-2.0947.2307-2.6957.0789-.7589.3764-.9107.7468-.4918.5828.2793.4797.686-.0668.4433-.285"
+                                            "3 1.8517-.5586 2.9021-.3643 1.9429h.2125l.2429-.2429.9835-1.3053 1.6514-2.0643.7286-.8196.85-.9046.5464-.4311h1.0321l.759 1.1293-.34 1.1657-1.0625 1.3"
+                                            "478-.8804 1.1414-1.2628 1.7-.7893 1.36.0729.1093.1882-.0183 2.8535-.607 1.5421-.2794 1.8396-.3157.8318.3886.091.3946-.3278.8075-1.967.4857-2.3072.4614"
+                                            "-3.4364.8136-.0425.0304.0486.0607 1.5482.1457.6618.0364h1.621l3.0175.2247.7892.522.4736.6376-.079.4857-1.2142.6193-1.6393-.3886-3.825-.9107-1.3113-.32"
+                                            "79h-.1822v.1093l1.0929 1.0686 2.0035 1.8092 2.5075 2.3314.1275.5768-.3218.4554-.34-.0486-2.2039-1.6575-.85-.7468-1.9246-1.621h-.1275v.17l.4432.6496 2."
+                                            "3436 3.5214.1214 1.0807-.17.3521-.6071.2125-.6679-.1214-1.3721-1.9246L14.38 17.959l-1.1414-1.9428-.1397.079-.674 7.2552-.3156.3703-.7286.2793-.6071-.4"
+                                            "614-.3218-.7468.3218-1.4753.3886-1.9246.3157-1.53.2853-1.9004.17-.6314-.0121-.0425-.1397.0182-1.4328 1.9672-2.1796 2.9446-1.7243 1.8456-.4128.164-.716"
+                                            "4-.3704.0667-.6618.4008-.5889 2.386-3.0357 1.4389-1.882.929-1.0868-.0062-.1579h-.0546l-6.3385 4.1164-1.1293.1457-.4857-.4554.0608-.7467.2307-.2429 1.9"
+                                            "064-1.3114Z";
+        constexpr char codex_mark_path[] = "M22.2819 9.8211a5.9847 5.9847 0 0 0-.5157-4.9108 6.0462 6.0462 0 0 0-6.5098-2.9A6.0651 6.0651 0 0 0 4.9807 4.1818a5.9847 5.9847 0 0 0-3.9977 2.9 6.046"
+                                           "2 6.0462 0 0 0 .7427 7.0966 5.98 5.98 0 0 0 .511 4.9107 6.051 6.051 0 0 0 6.5146 2.9001A5.9847 5.9847 0 0 0 13.2599 24a6.0557 6.0557 0 0 0 5.7718-4.20"
+                                           "58 5.9894 5.9894 0 0 0 3.9977-2.9001 6.0557 6.0557 0 0 0-.7475-7.0729zm-9.022 12.6081a4.4755 4.4755 0 0 1-2.8764-1.0408l.1419-.0804 4.7783-2.7582a.794"
+                                           "8.7948 0 0 0 .3927-.6813v-6.7369l2.02 1.1686a.071.071 0 0 1 .038.052v5.5826a4.504 4.504 0 0 1-4.4945 4.4944zm-9.6607-4.1254a4.4708 4.4708 0 0 1-.5346-"
+                                           "3.0137l.142.0852 4.783 2.7582a.7712.7712 0 0 0 .7806 0l5.8428-3.3685v2.3324a.0804.0804 0 0 1-.0332.0615L9.74 19.9502a4.4992 4.4992 0 0 1-6.1408-1.6464"
+                                           "zM2.3408 7.8956a4.485 4.485 0 0 1 2.3655-1.9728V11.6a.7664.7664 0 0 0 .3879.6765l5.8144 3.3543-2.0201 1.1685a.0757.0757 0 0 1-.071 0l-4.8303-2.7865A4."
+                                           "504 4.504 0 0 1 2.3408 7.872zm16.5963 3.8558L13.1038 8.364 15.1192 7.2a.0757.0757 0 0 1 .071 0l4.8303 2.7913a4.4944 4.4944 0 0 1-.6765 8.1042v-5.6772a"
+                                           ".79.79 0 0 0-.407-.667zm2.0107-3.0231l-.142-.0852-4.7735-2.7818a.7759.7759 0 0 0-.7854 0L9.409 9.2297V6.8974a.0662.0662 0 0 1 .0284-.0615l4.8303-2.786"
+                                           "6a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5."
+                                           "459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
+
+        // Claude·Codex 표식이다. 상표라 아이콘 글꼴(codicons)에 없으므로 SVG 경로를 그린다.
+        //  - Simple Icons에 Codex 표식이 없어 OpenAI 표식을 쓴다.
+        //  - 바로 뒤의 글이 provider 이름을 말하므로 보조 기술에는 드러내지 않는다 (이름을 두 번 읽지 않게).
+        //  - 경로는 처음 그릴 때 한 번만 푼다.
+        class provider_mark final : public luil::ui_element
+        {
+        public:
+            provider_mark(const std::u8string& id, const std::string_view provider)
+                : ui_element { luil::ui_element_id { kind_label, id } }
+                , codex_ { provider == "codex" }
+            {
+                set_hit_opaque(false);
+            }
+
+            void arrange(const luil::arrange_context& context) override
+            {
+                set_bounds(context.slot);
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot&) const override
+            {
+                const luil::rect_f box { bounds() };
+                const float side { std::min(box.width, box.height) };
+                if (side <= 0.0f)
+                    return;
+                // Claude는 고유색이 있어 테마와 관계없이 그 색이고, Codex는 단색 표식이라 글자색을 따른다.
+                SkPaint paint { luil::solid_paint(codex_ ? context.palette.primary_foreground : luil::make_ui_color(0xd9, 0x77, 0x57)) };
+                paint.setAntiAlias(true);
+                context.canvas.save();
+                context.canvas.translate(box.x + (box.width - side) / 2.0f, box.y + (box.height - side) / 2.0f);
+                context.canvas.scale(side / 24.0f, side / 24.0f);
+                context.canvas.drawPath(codex_ ? codex_path() : claude_path(), paint);
+                context.canvas.restore();
+            }
+
+            [[nodiscard]] luil::access_info accessibility() const override
+            {
+                return { .role = luil::access_role::none };
+            }
+
+        private:
+            [[nodiscard]] static const SkPath& claude_path()
+            {
+                static const SkPath path { SkParsePath::FromSVGString(claude_mark_path).value_or(SkPath {}) };
+                return path;
+            }
+
+            [[nodiscard]] static const SkPath& codex_path()
+            {
+                static const SkPath path { SkParsePath::FromSVGString(codex_mark_path).value_or(SkPath {}) };
+                return path;
+            }
+
+            bool codex_ { false };
+        };
+
+        // 표식으로 시작하는 한 줄이다. provider 이름은 표식 뒤에도 글로 남겨 읽기·검색·툴팁이 그대로다.
+        //  - `fit`이면 글 길이만큼만 차지한다 (상태 표시줄처럼 맞춤으로 쌓는 자리).
+        std::unique_ptr<luil::stack_element> provider_line(
+            const std::u8string& id, const std::string_view provider, std::u8string text, const float size, const luil::label_color_role color = luil::label_color_role::dim, const bool fit = false)
+        {
+            const luil::stack_config config { .direction = luil::stack_direction::row, .spacing = 4.0f, .cross_alignment = luil::stack_alignment::center };
+            auto line { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-line" }, config) };
+            const float mark { size + 1.0f };
+            line->add(std::make_unique<provider_mark>(id + u8"-mark", provider), { .length = mark, .cross_length = mark });
+            if (fit)
+                line->add_fit(label(id, std::move(text), size, color));
+            else
+                line->add_flexible(label(id, std::move(text), size, color));
+            return line;
+        }
+
+        // 앱 UI 명령의 인자로 싣는 수다. 같은 프로세스 안에서만 오가므로 짧은 십진 표기면 된다.
+        std::u8string number_text(const float value)
+        {
+            std::array<char, 32> buffer {};
+            const auto [end, error] { std::to_chars(buffer.data(), buffer.data() + buffer.size(), value) };
+            return error == std::errc {} ? u8(std::string_view { buffer.data(), end }) : std::u8string { u8"0" };
+        }
+
+        std::optional<float> parse_number(const std::u8string_view text)
+        {
+            float value { 0.0f };
+            const auto* const first { reinterpret_cast<const char*>(text.data()) };
+            const auto [end, error] { std::from_chars(first, first + text.size(), value) };
+            if (error != std::errc {} || end != first + text.size() || !std::isfinite(value))
+                return std::nullopt;
+            return value;
+        }
 
         std::unique_ptr<luil::panel_element> panel(const std::u8string& id, std::unique_ptr<luil::ui_element> content)
         {
@@ -473,7 +594,7 @@ namespace session_board {
             auto text { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-text" }, luil::stack_config { .spacing = 3.0f }) };
             const std::u8string title { task_text(session) };
             text->add(label(id + u8"-title", title, 12.0f), 17.0f);
-            text->add(label(id + u8"-meta", provider_text(session) + u8" · " + project_text(session) + u8" · " + activity_text(session, now), 11.0f, luil::label_color_role::dim), 16.0f);
+            text->add(provider_line(id + u8"-meta", session.provider, provider_text(session) + u8" · " + project_text(session) + u8" · " + activity_text(session, now), 11.0f), 16.0f);
             row->add_flexible(std::move(text));
             row->add(status_cell(id + u8"-status", session, now), status_cell_width);
             row->add(label(id + u8"-age", age_text(latest_update(session), now), 11.0f, luil::label_color_role::dim, luil::text_align::end), age_cell_width);
@@ -578,7 +699,7 @@ namespace session_board {
 
             const luil::stack_config header_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
             auto header { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"detail-header" }, header_config) };
-            header->add_flexible(label(u8"detail-source", provider_text(session) + u8" · " + project_text(session), 11.0f, luil::label_color_role::dim));
+            header->add_flexible(provider_line(u8"detail-source", session.provider, provider_text(session) + u8" · " + project_text(session), 11.0f));
             header->add_fit(label(u8"detail-age", age_text(latest_update(session), now), 11.0f, luil::label_color_role::dim));
             add(std::move(header), 16.0f);
             gap(8.0f);
@@ -671,7 +792,7 @@ namespace session_board {
             auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"detail-body" }, content_config) };
             const luil::stack_config header_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
             auto header { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"detail-header" }, header_config) };
-            header->add_flexible(label(u8"detail-source", provider_text(session) + u8" · " + project_text(session) + u8" · 하위", 11.0f, luil::label_color_role::dim));
+            header->add_flexible(provider_line(u8"detail-source", session.provider, provider_text(session) + u8" · " + project_text(session) + u8" · 하위", 11.0f));
             header->add_fit(label(u8"detail-age", age_text(child.updated_ms, now), 11.0f, luil::label_color_role::dim));
             content->add(std::move(header), 16.0f);
             content->add_gap(8.0f);
@@ -733,10 +854,10 @@ namespace session_board {
         constexpr float widget_group_header { 28.0f };
         constexpr float widget_footer_height { 30.0f };
         constexpr float widget_setting_row { 26.0f };
-        // 진하기의 범위와 자석이다. 자석은 예전 단추 값이라 손에 익은 값에 바로 붙는다.
-        constexpr float widget_opacity_minimum { 0.1f };
-        constexpr std::array<float, 4> widget_opacity_magnets { 0.2f, 0.35f, 0.5f, 0.7f };
+        // 진하기의 자석이다. 0%는 바탕 없이 글만 뜨고, 100%는 DWM 합성을 끈 불투명 창이다.
+        constexpr std::array<float, 6> widget_opacity_magnets { 0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f };
         constexpr float widget_row_inset { 12.0f };
+        constexpr float widget_theme_choice_width { 140.0f };
 
         std::unique_ptr<luil::button_element> widget_button(const std::u8string& id, const std::u8string& name, const char32_t glyph, luil::ui_action action, const bool active = false)
         {
@@ -880,7 +1001,7 @@ namespace session_board {
             const luil::stack_config top_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
             auto top { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, owner + u8"-top" }, top_config) };
             top->add(status_cell(owner + u8"-status", session, now), 112.0f);
-            top->add_flexible(label(owner + u8"-source", provider_text(session) + u8" · " + project_text(session), 11.0f, luil::label_color_role::dim));
+            top->add_flexible(provider_line(owner + u8"-source", session.provider, provider_text(session) + u8" · " + project_text(session), 11.0f));
             top->add_fit(label(owner + u8"-age", age_text(latest_update(session), now), 11.0f, luil::label_color_role::dim));
             const std::u8string focus_name { focus_tooltip(session, provider_text(session) + u8" 세션 창으로 이동") };
             auto focus { widget_button(owner + u8"-focus", focus_name, luil::codicons::icon_link_external, luil::make_message_action(focus_session_intent { session_key(session) })) };
@@ -960,14 +1081,17 @@ namespace session_board {
     }
 
     board_driver::board_driver(std::filesystem::path directory, const bool open_detail, std::filesystem::path codex_directory, std::filesystem::path claude_directory,
-        std::optional<claude_hook_result> claude_hooks, std::optional<codex_hook_result> codex_hooks)
+        std::optional<claude_hook_result> claude_hooks, std::optional<codex_hook_result> codex_hooks, std::filesystem::path detail_placement_file)
         : directory_ { std::move(directory) }
         , codex_directory_ { std::move(codex_directory) }
         , claude_directory_ { std::move(claude_directory) }
         , claude_hooks_ { std::move(claude_hooks) }
         , codex_hooks_ { std::move(codex_hooks) }
         , detail_open_ { open_detail }
+        , detail_placement_file_ { std::move(detail_placement_file) }
     {
+        if (!detail_placement_file_.empty())
+            detail_placement_ = load_window_placement(detail_placement_file_);
         // 프레임을 지우는 창 바탕을 투명하게 둔다. 색은 남겨 두어 상세 창이 알파만 되돌려 불투명 바탕을 깐다.
         auto style { std::make_shared<luil::ui_style>(luil::default_ui_style()) };
         style->dark.window_background = luil::with_alpha(style->dark.window_background, 0.0f);
@@ -1059,6 +1183,10 @@ namespace session_board {
         }
         else if (message.get<theme_intent>() != nullptr)
             dark_ = !dark_;
+        else if (const auto* mode { message.get<theme_mode_intent>() }; mode != nullptr)
+            dark_ = mode->dark;
+        else if (const auto* accent { message.get<accent_intent>() }; accent != nullptr)
+            accent_id_ = accent->id;
         else if (message.get<widget_failed_intent>() != nullptr)
             error_ = "The widget window could not be prepared.";
         else if (const auto* detail { message.get<open_detail_intent>() }; detail != nullptr)
@@ -1074,11 +1202,24 @@ namespace session_board {
         else if (const auto* backdrop { message.get<backdrop_intent>() }; backdrop != nullptr)
             backdrop_ = backdrop->backdrop;
         else if (const auto* opacity { message.get<opacity_intent>() }; opacity != nullptr)
-            opacity_ = std::clamp(opacity->value, widget_opacity_minimum, 1.0f);
-        else if (const auto* change { message.get<opacity_change_intent>() }; change != nullptr)
-            opacity_ = std::clamp(opacity_ + change->delta, widget_opacity_minimum, 1.0f);
+            opacity_ = std::clamp(opacity->value, 0.0f, 1.0f);
+        // 설정 줄은 한 번에 하나만 펼친다. 둘이 함께 위젯 높이를 잡아먹지 않게 한다.
         else if (message.get<backdrop_settings_intent>() != nullptr)
+        {
             backdrop_settings_open_ = !backdrop_settings_open_;
+            theme_settings_open_ = false;
+        }
+        else if (message.get<theme_settings_intent>() != nullptr)
+        {
+            theme_settings_open_ = !theme_settings_open_;
+            backdrop_settings_open_ = false;
+        }
+        else if (const auto* placement { message.get<detail_placement_intent>() }; placement != nullptr)
+        {
+            detail_placement_ = placement->placement;
+            if (!detail_placement_file_.empty())
+                save_window_placement(detail_placement_file_, placement->placement);
+        }
         else if (const auto* focus { message.get<focus_session_intent>() }; focus != nullptr)
             focus_session(focus->key);
         else if (const auto* widget { message.get<widget_state_intent>() }; widget != nullptr)
@@ -1150,6 +1291,7 @@ namespace session_board {
             notice_.clear();
         auto frame { std::make_shared<luil::ui_frame>() };
         frame->appearance.theme = dark_ ? luil::theme_preference::dark : luil::theme_preference::light;
+        frame->appearance.accent_id = accent_id_;
         frame->style = style_;
         frame->tree = std::make_shared<const luil::ui_tree>(make_widget_tree(now));
         if (detail_open_)
@@ -1164,6 +1306,9 @@ namespace session_board {
             detail.minimum_width = 820.0f;
             detail.minimum_height = 560.0f;
             detail.independent = true;
+            // 만들 때만 쓰인다. 닫았다 다시 열어도, 다음 실행에서도 마지막 자리로 연다.
+            detail.initial_placement = detail_placement_;
+            detail.placement = [](const luil::win32::window_placement& placement) { return luil::app_message { detail_placement_intent { placement } }; };
             detail.tree = std::make_shared<const luil::ui_tree>(make_detail_tree(now));
             detail.metrics = [](const float width, const float height, const float scale) { return luil::app_message { detail_metrics_intent { width, height, scale } }; };
             detail.close = [] { return luil::make_app_action(close_detail_intent {}); };
@@ -1340,9 +1485,9 @@ namespace session_board {
         {
             const auto signal { signal_text(now) };
             const auto split { signal.find(u8'\n') };
-            status->add_fit(label(u8"signal-codex", signal.substr(0, split), 11.0f, luil::label_color_role::dim));
+            status->add_fit(provider_line(u8"signal-codex", "codex", signal.substr(0, split), 11.0f, luil::label_color_role::dim, true));
             if (split != std::u8string::npos)
-                status->add_fit(label(u8"signal-claude", signal.substr(split + 1), 11.0f, luil::label_color_role::dim));
+                status->add_fit(provider_line(u8"signal-claude", "claude", signal.substr(split + 1), 11.0f, luil::label_color_role::dim, true));
         }
         std::u8string location { directory_.u8string() + u8" · 세션 " + u8(std::to_string(data_.sessions.size())) + u8"개" };
         if (data_.truncated)
@@ -1393,7 +1538,7 @@ namespace session_board {
         const auto add_button = [&](std::unique_ptr<luil::button_element> button) { caption->add(std::move(button), { .length = widget_icon_button, .cross_length = widget_icon_button }); };
         add_button(widget_button(
             u8"widget-detail", detail_open_ ? u8"상세 화면 닫기" : u8"상세 화면 열기", luil::codicons::icon_editor_layout, luil::make_message_action(open_detail_intent {}), detail_open_));
-        add_button(widget_button(u8"widget-theme", dark_ ? u8"밝은 테마로" : u8"어두운 테마로", luil::codicons::icon_color_mode, luil::make_message_action(theme_intent {})));
+        add_button(widget_button(u8"widget-theme", u8"테마 · 키 컬러", luil::codicons::icon_color_mode, luil::make_message_action(theme_settings_intent {}), theme_settings_open_));
         add_button(widget_button(u8"widget-backdrop", u8"배경 효과 · 진하기", luil::codicons::icon_symbol_color, luil::make_message_action(backdrop_settings_intent {}), backdrop_settings_open_));
         add_button(widget_button(u8"widget-pin", pinned_ ? u8"항상 위에 표시 해제" : u8"항상 위에 표시", luil::codicons::icon_pin, command_action(toggle_pin_command), pinned_));
         add_button(widget_button(u8"widget-collapse", collapsed_ ? u8"목록 펼치기" : u8"목록 접기", collapsed_ ? luil::codicons::icon_chevron_down : luil::codicons::icon_chevron_up,
@@ -1411,25 +1556,56 @@ namespace session_board {
             const luil::stack_config region_config { .spacing = widget_gap, .padding = luil::edge_insets::all(widget_gap) };
             auto region { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-region-body" }, region_config) };
             float used { caption_height + 1.0f + widget_footer_height + 2.0f * widget_gap };
+            const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
+            if (theme_settings_open_)
+            {
+                // 밝기와 키 컬러다. 키 컬러는 앱 전체 외양이라 상세 창도 함께 바뀐다.
+                const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 10.0f } };
+                auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-theme-settings" }, settings_config) };
+                luil::choice_group_config mode { .owner = u8"widget-theme-mode", .style = luil::choice_style::toggle, .name = u8"테마" };
+                mode.items.push_back({ u8"theme-light", u8"밝게" });
+                mode.items.push_back({ u8"theme-dark", u8"어둡게" });
+                mode.selected = dark_ ? u8"theme-dark" : u8"theme-light";
+                mode.select = [](const std::u8string& value) { return luil::make_app_action(theme_mode_intent { value == u8"theme-dark" }); };
+                auto mode_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-theme-row" }, row_config) };
+                mode_row->add(label(u8"widget-theme-name", u8"테마", 11.0f, luil::label_color_role::dim), 40.0f);
+                mode_row->add(std::make_unique<luil::choice_group_element>(std::move(mode)), { .length = widget_theme_choice_width, .cross_length = luil::choice_toggle_height });
+                mode_row->add_flexible_gap();
+                settings->add(std::move(mode_row), widget_setting_row);
+                settings->add(label(u8"widget-accent-name", u8"키 컬러", 11.0f, luil::label_color_role::dim), 16.0f);
+                luil::accent_picker_config accents { .owner = u8"widget-accent", .selected = accent_id_, .name = u8"키 컬러" };
+                accents.select = [](const std::u8string& id) { return luil::make_app_action(accent_intent { id }); };
+                // 견본 줄 수는 폭으로 정해지므로 실제로 받을 폭(목록 영역 여백·설정 여백·테두리를 뺀 값)으로 높이를 잰다.
+                const float picker_width { inner_width - 2.0f * widget_gap - 20.0f - 2.0f };
+                const float picker_height { luil::accent_picker_element::height_for(accents, picker_width) };
+                settings->add(std::make_unique<luil::accent_picker_element>(std::move(accents)), picker_height);
+                const float settings_height { 16.0f + widget_setting_row + 4.0f + 16.0f + 4.0f + picker_height };
+                region->add(panel(u8"widget-theme-surface", std::move(settings)), settings_height);
+                used += settings_height + widget_gap;
+            }
             if (backdrop_settings_open_)
             {
                 // 흐림과 진하기다. 팝업을 띄우지 않고 머릿줄 아래에 펼친다 — 위젯 창은 바탕이 투명하다.
                 const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 6.0f } };
                 auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-settings" }, settings_config) };
-                const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
                 // DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 스위치도 앱 UI 명령으로 답한다.
                 const bool blur { backdrop_ == widget_backdrop::blur };
                 luil::check_config effect { .owner = u8"widget-blur", .style = luil::check_style::toggle_switch, .label = u8"흐림", .checked = blur };
                 effect.toggle = command_action(blur ? backdrop_transparent_command : backdrop_blur_command);
-                effect.tooltip = u8"끄면 뒤가 흐리지 않고 그대로 비칩니다";
+                // 100%에서는 비칠 자리가 없어 스위치가 하는 일이 없다. 값은 남겨 두고 진하기를 내리면 다시 따른다.
+                const bool opaque { fully_opaque(opacity_) };
+                effect.tooltip = opaque ? u8"진하기가 100%라 뒤가 비치지 않습니다" : u8"끄면 뒤가 흐리지 않고 그대로 비칩니다";
+                auto effect_check { std::make_unique<luil::check_element>(std::move(effect)) };
+                effect_check->set_enabled(!opaque);
                 auto effect_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-backdrop-row" }, row_config) };
                 effect_row->add(label(u8"widget-backdrop-name", u8"배경", 11.0f, luil::label_color_role::dim), 40.0f);
-                effect_row->add_flexible(std::make_unique<luil::check_element>(std::move(effect)));
+                effect_row->add_flexible(std::move(effect_check));
                 settings->add(std::move(effect_row), widget_setting_row);
-                // 끌면 예전 단추 값에 붙고, Ctrl을 누른 채 끌면 붙지 않는다.
-                luil::slider_config level { .minimum = widget_opacity_minimum, .maximum = 1.0f, .value = opacity_ };
-                level.change = [](const float delta) { return luil::make_app_action(opacity_change_intent { delta }); };
-                level.change_to = [](const float value) { return luil::make_app_action(opacity_intent { value }); };
+                // 끌면 자석 지점에 붙고, Ctrl을 누른 채 끌면 붙지 않는다.
+                //  - 값은 위젯 창이 먼저 받는다. 100%를 넘나들 때 DWM 합성을 그 창의 thread에서 바꿔야 한다.
+                luil::slider_config level { .minimum = 0.0f, .maximum = 1.0f, .value = opacity_ };
+                level.change = [](const float delta) { return luil::input_action { luil::app_ui_command { opacity_change_command, number_text(delta) } }; };
+                level.change_to = [](const float value) { return luil::input_action { luil::app_ui_command { opacity_command, number_text(value) } }; };
                 level.magnets.assign(widget_opacity_magnets.begin(), widget_opacity_magnets.end());
                 auto slider { std::make_unique<luil::slider_element>(luil::ui_element_id { kind_button, u8"widget-opacity" }, std::move(level)) };
                 // 슬라이더는 보조 기술 이름을 tooltip에서만 읽는다.
@@ -1508,7 +1684,7 @@ namespace session_board {
             }
 
             luil::panel_config region_surface {};
-            region_surface.background = [alpha = opacity_](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.window_background, alpha); };
+            region_surface.background = [alpha = fully_opaque(opacity_) ? 1.0f : opacity_](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.window_background, alpha); };
             auto region_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-region" }, region_surface) };
             region_panel->set_content(std::move(region));
             content->add_flexible(std::move(region_panel));
@@ -1528,9 +1704,9 @@ namespace session_board {
             {
                 const auto signal { signal_text(now) };
                 const auto split { signal.find(u8'\n') };
-                footer->add_flexible(label(u8"widget-signal", signal.substr(0, split), 11.0f, luil::label_color_role::dim));
+                footer->add_flexible(provider_line(u8"widget-signal", "codex", signal.substr(0, split), 11.0f));
                 if (split != std::u8string::npos)
-                    footer->add_flexible(label(u8"widget-signal-claude", signal.substr(split + 1), 11.0f, luil::label_color_role::dim));
+                    footer->add_flexible(provider_line(u8"widget-signal-claude", "claude", signal.substr(split + 1), 11.0f));
             }
             luil::panel_config footer_surface {};
             footer_surface.background = [](const luil::ui_color_palette& palette) { return palette.surface_background; };
@@ -1595,7 +1771,7 @@ namespace session_board {
         return closed_.load();
     }
 
-    std::optional<luil::win32::window_placement> load_widget_placement(const std::filesystem::path& file)
+    std::optional<luil::win32::window_placement> load_window_placement(const std::filesystem::path& file)
     {
         try
         {
@@ -1608,6 +1784,7 @@ namespace session_board {
             placement.y = value.at("y").get<int>();
             placement.width = value.at("width").get<int>();
             placement.height = value.at("height").get<int>();
+            placement.maximized = value.value("maximized", false);
             if (!placement.valid() || !luil::win32::placement_in_screen_range(placement))
                 return std::nullopt;
             return placement;
@@ -1618,11 +1795,13 @@ namespace session_board {
         }
     }
 
-    void save_widget_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept
+    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept
     {
         try
         {
-            const nlohmann::json value { { "x", placement.x }, { "y", placement.y }, { "width", placement.width }, { "height", placement.height } };
+            nlohmann::json value { { "x", placement.x }, { "y", placement.y }, { "width", placement.width }, { "height", placement.height } };
+            if (placement.maximized)
+                value["maximized"] = true;
             std::filesystem::create_directories(file.parent_path());
             // 쓰다 끊겨도 옛 파일이 남도록 임시 파일을 다 쓴 뒤 바꿔 끼운다.
             const std::filesystem::path temporary { file.wstring() + L"." + std::to_wstring(GetCurrentProcessId()) + L".tmp" };
@@ -1662,7 +1841,7 @@ namespace session_board {
         auto saved { placement };
         if (window_.collapsed())
             saved.height = window_.expanded_height();
-        save_widget_placement(placement_file_, saved);
+        save_window_placement(placement_file_, saved);
         return {};
     }
 
@@ -1682,6 +1861,16 @@ namespace session_board {
             const auto backdrop { command.command == backdrop_blur_command ? widget_backdrop::blur : widget_backdrop::transparent };
             window_.set_backdrop(backdrop);
             host.post_app_message(luil::app_message { backdrop_intent { backdrop } });
+        }
+        else if (command.command == opacity_command || command.command == opacity_change_command)
+        {
+            // 진하기의 정본은 위젯 창이 든다. 100%에 들어서거나 벗어나면 그 자리에서 합성을 바꾸고 다듬은 값만 앱에 알린다.
+            //  - 끌기의 델타도 여기서 쌓으므로 앱 상태가 늦어도 값이 겹쳐 더해지지 않는다.
+            if (const auto value { parse_number(command.argument) }; value.has_value())
+            {
+                window_.set_opacity(command.command == opacity_command ? *value : window_.opacity() + *value);
+                host.post_app_message(luil::app_message { opacity_intent { window_.opacity() } });
+            }
         }
     }
 

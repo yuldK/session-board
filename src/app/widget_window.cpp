@@ -67,11 +67,21 @@ namespace session_board {
         apply_composition();
     }
 
+    void widget_window::set_opacity(const float opacity)
+    {
+        const bool was_opaque { fully_opaque(opacity_) };
+        opacity_ = std::clamp(opacity, 0.0f, 1.0f);
+        if (was_opaque != fully_opaque(opacity_))
+            apply_composition();
+    }
+
     void widget_window::apply_composition() const
     {
         if (window_ == nullptr)
             return;
-        const bool blur { backdrop_ == widget_backdrop::blur };
+        // 100%면 비칠 자리가 없으므로 Acrylic도 알파 합성도 끈다. DWM이 뒤를 읽어 섞지 않는다.
+        const bool opaque { fully_opaque(opacity_) };
+        const bool blur { backdrop_ == widget_backdrop::blur && !opaque };
         // 흐림은 창 전체를 DWM 합성면으로 넓히고 Acrylic을 깐다. 그림이 투명한 자리마다 흐린 뒤가 보인다.
         // 투명·불투명은 합성면을 넓히지 않는다 — 넓히면 DWM이 테마 색 판을 깔아 뒤가 비치지 않는다.
         const MARGINS margins { blur ? MARGINS { -1, -1, -1, -1 } : MARGINS {} };
@@ -80,7 +90,7 @@ namespace session_board {
         DwmSetWindowAttribute(window_, DWMWA_SYSTEMBACKDROP_TYPE, &type, sizeof(type));
         // 빈 흐림 영역으로 blur-behind를 켜면 흐림 없이 그림의 알파대로만 합성한다.
         const HRGN empty { CreateRectRgn(0, 0, -1, -1) };
-        const DWM_BLURBEHIND behind { .dwFlags = DWM_BB_ENABLE | DWM_BB_BLURREGION, .fEnable = blur ? FALSE : TRUE, .hRgnBlur = empty };
+        const DWM_BLURBEHIND behind { .dwFlags = DWM_BB_ENABLE | DWM_BB_BLURREGION, .fEnable = blur || opaque ? FALSE : TRUE, .hRgnBlur = empty };
         DwmEnableBlurBehindWindow(window_, &behind);
         if (empty != nullptr)
             DeleteObject(empty);
@@ -129,6 +139,11 @@ namespace session_board {
     widget_backdrop widget_window::backdrop() const noexcept
     {
         return backdrop_;
+    }
+
+    float widget_window::opacity() const noexcept
+    {
+        return opacity_;
     }
 
     LRESULT CALLBACK widget_window::subclass(const HWND window, const UINT message, const WPARAM word, const LPARAM data, const UINT_PTR id, const DWORD_PTR reference)

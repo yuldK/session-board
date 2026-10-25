@@ -36,6 +36,18 @@ namespace session_board {
     {};
     struct theme_intent
     {};
+    struct theme_mode_intent
+    {
+        bool dark { true };
+    };
+    // 키 컬러를 이 id로 둔다 (luil 키 컬러 목록의 id).
+    struct accent_intent
+    {
+        std::u8string id {};
+    };
+    // 위젯 머릿줄 아래의 테마 설정 줄을 펼치거나 접는다.
+    struct theme_settings_intent
+    {};
     struct widget_failed_intent
     {};
     struct scroll_intent
@@ -79,15 +91,11 @@ namespace session_board {
     {
         widget_backdrop backdrop { widget_backdrop::blur };
     };
-    // 진하기를 이 값으로 둔다 (자석에 붙음, 보조 기술의 값 정하기).
+    // 위젯 창이 다듬어 둔 진하기다. 100%에서 DWM 합성을 꺼야 하므로 슬라이더는 위젯 창(UI thread)에 먼저 알리고,
+    // 그쪽이 합성을 고친 뒤 이 값을 보낸다.
     struct opacity_intent
     {
-        float value { 0.35f };
-    };
-    // 진하기를 이만큼 바꾼다 (끌기, 키).
-    struct opacity_change_intent
-    {
-        float delta { 0.0f };
+        float value { widget_default_opacity };
     };
     struct backdrop_settings_intent
     {};
@@ -96,11 +104,16 @@ namespace session_board {
     {
         std::u8string key {};
     };
+    // 상세 창이 옮겨지거나 크기가 바뀌었다.
+    struct detail_placement_intent
+    {
+        luil::win32::window_placement placement {};
+    };
 
-    // 위젯의 마지막 자리와 크기다. 값이 없거나 깨졌으면 빈 값이라 기본 자리로 연다.
-    [[nodiscard]] std::optional<luil::win32::window_placement> load_widget_placement(const std::filesystem::path& file);
-    // 실패해도 위젯 동작을 막지 않는다. 다음 이동 때 다시 쓴다.
-    void save_widget_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept;
+    // 창(위젯·상세)의 마지막 자리와 크기다. 값이 없거나 깨졌으면 빈 값이라 기본 자리로 연다.
+    [[nodiscard]] std::optional<luil::win32::window_placement> load_window_placement(const std::filesystem::path& file);
+    // 실패해도 창 동작을 막지 않는다. 다음 이동 때 다시 쓴다.
+    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept;
 
     [[nodiscard]] luil::caption_config board_caption();
     // 상세 창의 caption이다. 보조 창의 비클라이언트 판정과 tree의 caption이 같은 값을 쓴다.
@@ -110,7 +123,7 @@ namespace session_board {
     {
     public:
         explicit board_driver(std::filesystem::path directory, bool open_detail = false, std::filesystem::path codex_directory = {}, std::filesystem::path claude_directory = {},
-            std::optional<claude_hook_result> claude_hooks = std::nullopt, std::optional<codex_hook_result> codex_hooks = std::nullopt);
+            std::optional<claude_hook_result> claude_hooks = std::nullopt, std::optional<codex_hook_result> codex_hooks = std::nullopt, std::filesystem::path detail_placement_file = {});
         ~board_driver() override;
         void start() override;
         void handle(luil::app_message message) override;
@@ -159,8 +172,14 @@ namespace session_board {
         bool collapsed_ { false };
         bool pinned_ { true };
         bool backdrop_settings_open_ { false };
+        bool theme_settings_open_ { false };
+        std::u8string accent_id_ { luil::default_accent_id };
         widget_backdrop backdrop_ { widget_backdrop::blur };
-        float opacity_ { 0.35f };
+        float opacity_ { widget_default_opacity };
+        // 상세 창의 마지막 자리다. 비어 있으면 위젯 왼쪽의 기본 자리로 연다.
+        //  - 파일이 비어 있으면 저장하지 않는다 (테스트 데이터로 연 실행). 그래도 이번 실행 안에서는 다시 열 때 쓴다.
+        std::filesystem::path detail_placement_file_ {};
+        std::optional<luil::win32::window_placement> detail_placement_ {};
         std::u8string expanded_session_ {};
         std::u8string selected_session_ {};
         float scroll_ { 0.0f };
