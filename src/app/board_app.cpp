@@ -2,6 +2,7 @@
 
 #include "core/host_window.h"
 #include "luil/generated/codicons.h"
+#include "win32/resource_ids.h"
 
 #include "include/core/SkBlendMode.h"
 #include "include/core/SkCanvas.h"
@@ -45,6 +46,13 @@ namespace session_board {
         constexpr float field_height { 28.0f };
         constexpr float field_name_width { 64.0f };
         constexpr float filter_width { 264.0f };
+        // 라이선스 화면의 치수다 (논리 픽셀). 원문 줄은 luil 기본 행(본문 글꼴, 양옆 8)을 쓴다.
+        constexpr float license_list_width { 300.0f };
+        constexpr float license_row_height { 28.0f };
+        constexpr float license_line_height { 18.0f };
+        constexpr float license_row_padding { 8.0f };
+        // 본문 글꼴 한 글자의 어림 폭이다 (글자 크기 배수). 넘치는 줄은 기본 행이 잘라 그리므로 넉넉히 잡는다.
+        constexpr float license_glyph_width { 0.62f };
 
         std::u8string u8(const std::string_view text)
         {
@@ -1173,6 +1181,37 @@ namespace session_board {
             result->set_content(std::move(content));
             return result;
         }
+
+        // 실행 파일 resource에 실린 제3자 고지(luil 고지 생성기의 원문)를 나눈다. 못 찾으면 빈 목록이다.
+        std::vector<notice_component> embedded_notices()
+        {
+            const HMODULE module { GetModuleHandleW(nullptr) };
+            const HRSRC resource { FindResourceW(module, MAKEINTRESOURCEW(IDR_THIRD_PARTY_NOTICES), RT_RCDATA) };
+            if (resource == nullptr)
+                return {};
+            const HGLOBAL loaded { LoadResource(module, resource) };
+            const void* data { loaded == nullptr ? nullptr : LockResource(loaded) };
+            if (data == nullptr)
+                return {};
+            // RCDATA는 끝에 NUL이 없으므로 크기로 자른다.
+            return parse_notices({ static_cast<const char*>(data), SizeofResource(module, resource) });
+        }
+
+        // 라이선스 목록 행의 키는 이 앞붙이에 고지의 절 순서를 붙인 것이다. UIA 검증도 이 이름으로 행을 찾는다.
+        constexpr std::u8string_view license_prefix { u8"license-" };
+
+        std::u8string license_key(const std::size_t index)
+        {
+            return std::u8string { license_prefix } + u8(std::to_string(index));
+        }
+
+        std::size_t license_index(const std::u8string_view key)
+        {
+            const std::u8string_view digits { key.substr(std::min(key.size(), license_prefix.size())) };
+            std::size_t index { 0 };
+            std::from_chars(reinterpret_cast<const char*>(digits.data()), reinterpret_cast<const char*>(digits.data() + digits.size()), index);
+            return index;
+        }
     } // namespace
 
     luil::caption_config board_caption()
@@ -1185,13 +1224,16 @@ namespace session_board {
         return caption;
     }
 
-    luil::caption_config detail_caption(const bool dark)
+    luil::caption_config detail_caption(const bool dark, const bool licenses)
     {
         auto caption { board_caption() };
         caption.title = u8"Session Board · 상세";
         caption.close_tooltip = u8"상세 화면 닫기";
         caption.app_buttons.push_back({ .key = u8"theme", .glyph = luil::codicons::icon_color_mode, .tooltip = dark ? u8"밝게" : u8"어둡게", .action = luil::make_message_action(theme_intent {}) });
         caption.app_buttons.push_back({ .key = u8"refresh", .glyph = luil::codicons::icon_refresh, .tooltip = u8"새로 고침", .action = luil::make_message_action(refresh_intent {}) });
+        const char32_t license_glyph { licenses ? luil::codicons::icon_arrow_left : luil::codicons::icon_law };
+        const std::u8string license_tooltip { licenses ? u8"세션 목록으로" : u8"오픈 소스 라이선스" };
+        caption.app_buttons.push_back({ .key = u8"licenses", .glyph = license_glyph, .tooltip = license_tooltip, .action = luil::make_message_action(licenses_intent {}) });
         return caption;
     }
 
@@ -1317,11 +1359,16 @@ namespace session_board {
         else if (const auto* detail { message.get<open_detail_intent>() }; detail != nullptr)
         {
             detail_open_ = !detail_open_ || !detail->key.empty() || detail->keep_open;
+            // 세션을 보러 연 것이므로 라이선스 화면에서 세션 목록으로 돌아온다.
+            licenses_open_ = false;
             if (!detail->key.empty())
                 selected_session_ = detail->key;
         }
         else if (message.get<close_detail_intent>() != nullptr)
+        {
             detail_open_ = false;
+            licenses_open_ = false;
+        }
         else if (const auto* detail_metrics { message.get<detail_metrics_intent>() }; detail_metrics != nullptr)
             detail_metrics_ = *detail_metrics;
         else if (const auto* backdrop { message.get<backdrop_intent>() }; backdrop != nullptr)
@@ -1366,6 +1413,22 @@ namespace session_board {
         {
             float& offset { scroll->detail ? detail_scroll_ : scroll_ };
             offset = std::max(0.0f, scroll->absolute ? scroll->value : offset + scroll->value);
+        }
+        else if (const auto* licenses { message.get<licenses_intent>() }; licenses != nullptr)
+        {
+            licenses_open_ = !licenses_open_ || licenses->keep_open;
+            detail_open_ = detail_open_ || licenses->keep_open;
+        }
+        else if (const auto* license { message.get<select_license_intent>() }; license != nullptr)
+        {
+            if (license->index != license_)
+                license_text_scroll_ = 0.0f;
+            license_ = license->index;
+        }
+        else if (const auto* license_scroll { message.get<license_scroll_intent>() }; license_scroll != nullptr)
+        {
+            float& offset { license_scroll->text ? license_text_scroll_ : license_list_scroll_ };
+            offset = std::max(0.0f, license_scroll->absolute ? license_scroll->value : offset + license_scroll->value);
         }
     }
 
@@ -1441,7 +1504,7 @@ namespace session_board {
             // 위젯으로 지켜보다가 자세히 볼 때 여는 독립 창이다. 작업 표시줄에 따로 선다.
             luil::ui_window detail {};
             detail.id = u8"detail";
-            detail.caption = detail_caption(dark());
+            detail.caption = detail_caption(dark(), licenses_open_);
             detail.x = -1140.0f;
             detail.width = 1120.0f;
             detail.height = 800.0f;
@@ -1471,11 +1534,25 @@ namespace session_board {
         ground->arrange({ { 0.0f, 0.0f, width, height }, scale });
         root->add(std::move(ground));
         // 창 전체의 명령은 caption의 앱 단추로 둔다. 본문은 세션만 다룬다.
-        const auto caption_config { detail_caption(dark()) };
+        const auto caption_config { detail_caption(dark(), licenses_open_) };
         const float caption_height { luil::caption_element::height_for(caption_config) * scale };
         auto caption { std::make_unique<luil::caption_element>(caption_config) };
         caption->arrange({ { 0.0f, 0.0f, width, caption_height }, scale });
         root->add(std::move(caption));
+        if (licenses_open_)
+        {
+            luil::virtual_list_element* list_view { nullptr };
+            luil::virtual_list_element* text_view { nullptr };
+            auto licenses { make_license_body(width / scale, (height - caption_height) / scale, list_view, text_view) };
+            licenses->arrange({ { 0.0f, caption_height, width, height - caption_height }, scale });
+            // 흘린 양은 목록이 다듬은 값으로 되돌린다. 끝을 넘겨 굴린 휠이 쌓이지 않는다.
+            if (list_view != nullptr)
+                license_list_scroll_ = list_view->metrics().scroll_offset;
+            if (text_view != nullptr)
+                license_text_scroll_ = text_view->metrics().scroll_offset;
+            root->add(std::move(licenses));
+            return root;
+        }
 
         std::array<std::size_t, 3> provider_counts {};
         std::size_t attention { 0 };
@@ -1642,6 +1719,95 @@ namespace session_board {
             detail_scroll_ = scroll_metrics->metrics().scroll_offset;
         root->add(std::move(body));
         return root;
+    }
+
+    std::unique_ptr<luil::ui_element> board_driver::make_license_body(const float width, const float height, luil::virtual_list_element*& list_view, luil::virtual_list_element*& text_view)
+    {
+        if (!licenses_.has_value())
+            licenses_ = embedded_notices();
+        const auto& components { *licenses_ };
+        license_ = components.empty() ? 0 : std::min(license_, components.size() - 1);
+
+        auto body { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"license-body" }, luil::stack_config {}) };
+        const luil::stack_config toolbar_config {
+            .direction = luil::stack_direction::row, .spacing = 12.0f, .padding = { row_inset, 0.0f, row_inset, 0.0f }, .cross_alignment = luil::stack_alignment::center
+        };
+        auto toolbar { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"license-toolbar" }, toolbar_config) };
+        toolbar->add_fit(label(u8"license-title", u8"오픈 소스 라이선스", 14.0f));
+        toolbar->add_flexible(
+            label(u8"license-summary", u8"이 실행 파일에 들어 있는 제3자 구성 요소 " + u8(std::to_string(components.size())) + u8"개의 라이선스 원문입니다.", 11.0f, luil::label_color_role::dim));
+        const luil::text_button_config back_config { .text = u8"세션 목록으로", .glyph = luil::codicons::icon_arrow_left };
+        auto back { std::make_unique<luil::text_button_element>(luil::ui_element_id { kind_button, u8"license-back" }, back_config) };
+        back->set_action(luil::ui_trigger::left_click, luil::make_message_action(licenses_intent {}));
+        toolbar->add_fit(std::move(back));
+        body->add(std::move(toolbar), toolbar_height);
+        body->add(divider(u8"license-toolbar-rule"), 1.0f);
+
+        if (components.empty())
+        {
+            const luil::stack_config config { .padding = luil::edge_insets::all(24.0f), .main_alignment = luil::stack_main_alignment::center };
+            auto empty { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"license-empty-body" }, config) };
+            empty->add(label(u8"license-empty", u8"실행 파일에서 라이선스 고지를 찾지 못했습니다.", 14.0f, luil::label_color_role::primary, luil::text_align::center), 24.0f);
+            body->add_flexible(panel(u8"license-empty-surface", std::move(empty)));
+            return body;
+        }
+
+        const auto pick = [](const std::u8string& key) { return luil::make_app_action(select_license_intent { license_index(key) }); };
+        luil::virtual_list_config list {};
+        list.owner = u8"license-list";
+        for (std::size_t index { 0 }; index < components.size(); ++index)
+            list.items.push_back({ .key = license_key(index), .label = u8(components[index].name) });
+        list.selected = license_key(license_);
+        list.row_height = license_row_height;
+        list.scroll_offset = license_list_scroll_;
+        list.select = pick;
+        list.move = pick;
+        list.activate = pick;
+        list.scroll = [](const float delta) { return luil::make_app_action(license_scroll_intent { delta, false, false }); };
+        list.scroll_to = [](const float offset) { return luil::make_app_action(license_scroll_intent { offset, true, false }); };
+        auto list_element { std::make_unique<luil::virtual_list_element>(std::move(list)) };
+        list_view = list_element.get();
+
+        // 원문은 고른 구성 요소 하나만 줄로 나눠 둔다. Skia 고지까지 합친 전체는 수천 줄이다.
+        const float text_width { width - license_list_width - 1.0f };
+        const auto columns { static_cast<std::size_t>(std::max(0.0f, text_width - 2.0f * license_row_padding - luil::list_scrollbar_width) / (style_->metrics.body_font_size * license_glyph_width)) };
+        if (license_lines_ == nullptr || license_lines_index_ != license_ || license_lines_columns_ != columns)
+        {
+            auto lines { std::make_shared<std::vector<luil::virtual_list_item>>() };
+            const auto wrapped { wrap_notice_lines(components[license_].text, columns) };
+            lines->reserve(wrapped.size());
+            for (std::size_t index { 0 }; index < wrapped.size(); ++index)
+                lines->push_back({ .key = u8"line-" + u8(std::to_string(index)), .label = u8(wrapped[index]) });
+            license_lines_ = std::move(lines);
+            license_lines_index_ = license_;
+            license_lines_columns_ = columns;
+        }
+        luil::virtual_list_config text {};
+        text.owner = u8"license-text";
+        text.shared_items = license_lines_;
+        text.row_height = license_line_height;
+        text.scroll_offset = license_text_scroll_;
+        text.scroll = [](const float delta) { return luil::make_app_action(license_scroll_intent { delta, false, true }); };
+        text.scroll_to = [](const float offset) { return luil::make_app_action(license_scroll_intent { offset, true, true }); };
+        auto text_element { std::make_unique<luil::virtual_list_element>(std::move(text)) };
+        text_view = text_element.get();
+
+        const luil::stack_config heading_config { .direction = luil::stack_direction::row, .padding = { row_inset, 0.0f, row_inset, 0.0f }, .cross_alignment = luil::stack_alignment::center };
+        auto heading { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"license-heading" }, heading_config) };
+        heading->add_flexible(label(u8"license-name", u8(components[license_].name), 13.0f));
+        auto pane { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"license-pane" }, luil::stack_config {}) };
+        pane->add(std::move(heading), field_height + 8.0f);
+        pane->add(divider(u8"license-heading-rule"), 1.0f);
+        pane->add_flexible(std::move(text_element));
+
+        auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"license-content" }, luil::stack_config { .direction = luil::stack_direction::row }) };
+        auto surface { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"license-list-surface" }, luil::panel_config {}) };
+        surface->set_content(std::move(list_element));
+        content->add(std::move(surface), license_list_width);
+        content->add(divider(u8"license-divider"), 1.0f);
+        content->add_flexible(std::move(pane));
+        body->add(std::move(content), std::max(0.0f, height - toolbar_height - 1.0f));
+        return body;
     }
 
     std::unique_ptr<luil::root_element> board_driver::make_widget_tree(const std::int64_t now)
@@ -2032,7 +2198,9 @@ namespace session_board {
         if (instance_ != nullptr)
             instance_->bind_window(window_.handle());
         // 위젯은 작업 표시줄에 서지 않으므로 숨기거나 끝낼 자리를 알림 영역에 둔다.
-        tray_.attach(window_.handle(), [&host] { host.post_app_message(luil::app_message { open_detail_intent { .keep_open = true } }); });
+        tray_.attach(
+            window_.handle(), [&host] { host.post_app_message(luil::app_message { open_detail_intent { .keep_open = true } }); },
+            [&host] { host.post_app_message(luil::app_message { licenses_intent { .keep_open = true } }); });
     }
 
     luil::app_message board_delegate::make_window_placement_message(const luil::win32::window_placement& placement)

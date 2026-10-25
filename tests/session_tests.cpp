@@ -1,4 +1,5 @@
 #include "core/codex_monitor.h"
+#include "core/notices.h"
 #include "core/store.h"
 
 #include <windows.h>
@@ -402,6 +403,36 @@ namespace session_board {
             UnlockFileEx(handle.get(), 0, 1, 0, &overlap);
             require(wait([](const auto& session) { return !session.runtime_loaded && session.turn_closed; }), "Released writer lock remained loaded.");
         }
+
+        void notices()
+        {
+            const std::string rule { "----------------------------------------" };
+            const std::string text { "머리말\n\n\n" + rule + "\nComponent: luil\n" + rule + "\r\nMIT License\r\n\r\n\n\n" + rule + "\nComponent: Skia and its bundled components\n" + rule + "\n소개\n"
+                + rule + "\nComponent: Skia\n" + rule + "\nBSD\n\n\n" + rule + "\nComponent: nlohmann/json\n" + rule + "\nMIT\n" };
+            const auto components { parse_notices(text) };
+            require(components.size() == 4, "Notice sections not split.");
+            require(components[0].name == "luil" && components[0].text == "MIT License", "Notice name or text not trimmed.");
+            require(components[1].text == "소개" && components[2].name == "Skia", "Nested Skia section not split.");
+            require(components[3].name == "nlohmann/json" && components[3].text == "MIT", "Last notice section lost.");
+            require(parse_notices("고지 없음").empty(), "Text without sections produced components.");
+            const auto crlf { parse_notices(rule + "\r\nComponent: zlib\r\n" + rule + "\r\nzlib License\r\n") };
+            require(crlf.size() == 1 && crlf[0].name == "zlib" && crlf[0].text == "zlib License", "CRLF notices not split.");
+            std::ifstream generated { SESSION_BOARD_NOTICES_FILE, std::ios::binary };
+            const std::string embedded { std::istreambuf_iterator<char> { generated }, std::istreambuf_iterator<char> {} };
+            const auto embedded_components { parse_notices(embedded) };
+            require(std::ranges::any_of(embedded_components, [](const auto& component) { return component.name == "nlohmann/json" && component.text.find("MIT License") != std::string::npos; }),
+                "Generated notices lost the nlohmann/json license.");
+            require(std::ranges::any_of(embedded_components, [](const auto& component) { return component.name == "luil"; }), "Generated notices lost the luil license.");
+
+            const auto lines { wrap_notice_lines("Permission is hereby granted, free of charge, to any person\r\n\n", 20) };
+            require(lines.size() == 4 && lines[0] == "Permission is hereby" && lines[1] == "granted, free of" && lines[2] == "charge, to any" && lines[3] == "person", "Words not wrapped at spaces.");
+            const auto tabs { wrap_notice_lines("a\r\n\tb", 20) };
+            require(tabs.size() == 2 && tabs[0] == "a" && tabs[1] == "    b", "Tab or carriage return not normalized.");
+            const auto long_word { wrap_notice_lines(std::string(40, 'x'), 16) };
+            require(long_word.size() == 3 && long_word[0].size() == 16, "Long word not cut at the column.");
+            const auto wide { wrap_notice_lines("가나다라마바사아자차카타파하", 16) };
+            require(wide.size() == 2 && wide[0] == "가나다라마바사아", "Wide glyphs not counted as two columns.");
+        }
     } // namespace
 } // namespace session_board
 
@@ -411,6 +442,7 @@ int main()
     try
     {
         session_board::lifecycle();
+        session_board::notices();
         session_board::validation();
         session_board::widget_lifecycle();
         session_board::children(directory / "children");

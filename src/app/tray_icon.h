@@ -15,8 +15,8 @@ namespace session_board {
         ~tray_icon();
         tray_icon(const tray_icon&) = delete;
         tray_icon& operator=(const tray_icon&) = delete;
-        // 위젯 창의 메시지로 아이콘 알림을 받는다. `open_detail`은 메뉴의 상세 화면 항목이 UI thread에서 부른다.
-        void attach(HWND window, std::function<void()> open_detail);
+        // 위젯 창의 메시지로 아이콘 알림을 받는다. `open_detail`·`open_licenses`는 메뉴의 상세 화면·라이선스 항목이 UI thread에서 부른다.
+        void attach(HWND window, std::function<void()> open_detail, std::function<void()> open_licenses);
 
     private:
         void add() noexcept;
@@ -32,5 +32,6 @@ namespace session_board {
         // 창을 닫기 시작했으면 탐색기가 다시 떠도 아이콘을 되살리지 않는다.
         bool closing_ { false };
         std::function<void()> open_detail_ {};
+        std::function<void()> open_licenses_ {};
     };
 } // namespace session_board

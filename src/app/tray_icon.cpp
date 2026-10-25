@@ -16,6 +16,7 @@ namespace session_board {
         constexpr UINT toggle_item { 1 };
         constexpr UINT detail_item { 2 };
         constexpr UINT exit_item { 3 };
+        constexpr UINT licenses_item { 4 };
 
         NOTIFYICONDATAW icon_data(const HWND window) noexcept
         {
@@ -38,7 +39,7 @@ namespace session_board {
             DestroyIcon(icon_);
     }
 
-    void tray_icon::attach(const HWND window, std::function<void()> open_detail)
+    void tray_icon::attach(const HWND window, std::function<void()> open_detail, std::function<void()> open_licenses)
     {
         if (window == nullptr || window_ != nullptr)
             return;
@@ -49,6 +50,7 @@ namespace session_board {
             return;
         window_ = window;
         open_detail_ = std::move(open_detail);
+        open_licenses_ = std::move(open_licenses);
         // 알림 영역은 작은 아이콘 크기로 그린다. 큰 그림을 줄이면 흐려진다.
         icon_
             = static_cast<HICON>(LoadImageW(GetModuleHandleW(nullptr), MAKEINTRESOURCEW(IDI_SESSION_BOARD), IMAGE_ICON, GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), LR_DEFAULTCOLOR));
@@ -99,6 +101,7 @@ namespace session_board {
         const bool visible { IsWindowVisible(window_) != FALSE && IsIconic(window_) == FALSE };
         AppendMenuW(menu, MF_STRING, toggle_item, visible ? L"위젯 숨기기" : L"위젯 보이기");
         AppendMenuW(menu, MF_STRING, detail_item, L"상세 화면 열기");
+        AppendMenuW(menu, MF_STRING, licenses_item, L"오픈 소스 라이선스");
         AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
         AppendMenuW(menu, MF_STRING, exit_item, L"종료");
         SetMenuDefaultItem(menu, toggle_item, FALSE);
@@ -113,6 +116,8 @@ namespace session_board {
             toggle_widget();
         else if (item == detail_item && open_detail_)
             open_detail_();
+        else if (item == licenses_item && open_licenses_)
+            open_licenses_();
         else if (item == exit_item)
             PostMessageW(window_, WM_CLOSE, 0, 0);
     }

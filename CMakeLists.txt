@@ -29,7 +29,8 @@ add_library(session_board_core STATIC src/core/session.cpp src/core/session.h sr
     src/core/claude_hooks.cpp src/core/claude_hooks.h
     src/core/codex_hooks.cpp src/core/codex_hooks.h src/core/hook_installation.h
     src/core/hook_command.cpp src/core/hook_command.h
-    src/core/host_window.cpp src/core/host_window.h)
+    src/core/host_window.cpp src/core/host_window.h
+    src/core/notices.cpp src/core/notices.h)
 target_include_directories(session_board_core PUBLIC src)
 target_link_libraries(session_board_core PUBLIC session_board_options luil::nlohmann_json shell32 ole32)
 
@@ -44,19 +45,19 @@ add_executable(session_board WIN32 src/app/main.cpp src/app/resource.h src/app/b
     src/app/tray_icon.cpp src/app/tray_icon.h
     resources/session_board.rc "${CMAKE_BINARY_DIR}/generated/luil_resources.rc")
 set_target_properties(session_board PROPERTIES OUTPUT_NAME session-board)
-target_include_directories(session_board PRIVATE "${PROJECT_SOURCE_DIR}/assets")
+# 라이선스 화면이 고지 resource의 ID를 luil 머리에서 읽는다. 생성한 .rc 조각도 같은 머리를 쓴다.
+target_include_directories(session_board PRIVATE "${PROJECT_SOURCE_DIR}/assets" "${LUIL_SOURCE_DIRECTORY}")
 target_link_libraries(session_board PRIVATE session_board_core luil::luil comctl32 dwmapi)
 
-configure_file(third_party/luil/third_party/nlohmann_json/LICENSE.MIT "${CMAKE_BINARY_DIR}/bin/json-LICENSE.txt" COPYONLY)
-
-# 앱이 Hook 등록 때 자신과 옆의 라이선스를 함께 복사하므로 둘을 같은 폴더에 둔다.
+# 제3자 고지는 실행 파일 resource에 실려 앱의 라이선스 화면이 보이므로 배포 파일은 실행 파일 하나다.
 install(TARGETS session_board RUNTIME DESTINATION .)
-install(FILES third_party/luil/third_party/nlohmann_json/LICENSE.MIT DESTINATION . RENAME json-LICENSE.txt)
 
 if(SESSION_BOARD_BUILD_TESTS)
     enable_testing()
     add_executable(session_board_tests tests/session_tests.cpp)
     target_link_libraries(session_board_tests PRIVATE session_board_core)
+    # 실행 파일에 싣는 고지 원문 그대로 나눠 본다. 생성기의 꼴이 바뀌면 라이선스 화면보다 먼저 여기서 깨진다.
+    target_compile_definitions(session_board_tests PRIVATE SESSION_BOARD_NOTICES_FILE="${CMAKE_BINARY_DIR}/generated/third_party_notices.txt")
     add_test(NAME session_board_core COMMAND session_board_tests)
     add_executable(session_board_claude_tests tests/claude_tests.cpp)
     target_link_libraries(session_board_claude_tests PRIVATE session_board_core)

@@ -124,6 +124,13 @@ try {
     $null = Step "Wait-LuilElement -id 'filter-all' -all_surfaces -absent"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-detail')"
     $null = Step "Wait-LuilElement -id 'empty-title' -name '아직 수신한 세션이 없습니다' -all_surfaces"
+    # 제3자 고지는 실행 파일 resource에서 읽는다. 배포 폴더에 라이선스 파일이 없어도 이 화면에 실린다.
+    $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'licenses' -all_surfaces)"
+    $null = Step "Set-LuilScroll (Wait-LuilElement -id 'license-list' -type 'ScrollBar' -all_surfaces) -end"
+    $null = Step "Select-LuilItem (Wait-LuilElement -name 'nlohmann/json' -all_surfaces)"
+    $null = Step "Wait-LuilElement -search 'Niels Lohmann' -all_surfaces"
+    $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'license-back' -all_surfaces)"
+    $null = Step "Wait-LuilElement -id 'empty-title' -all_surfaces"
 
     Send-Codex 'UserPromptSubmit'
     $null = Step "Wait-LuilElement -name 'UI 실시간 갱신' -all_surfaces"
@@ -266,7 +273,7 @@ while ($true) {
     # 위젯의 상세 화면 단추는 상세 창을 닫기도 한다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-detail')"
     $null = Step "Wait-LuilElement -id 'filter-all' -all_surfaces -absent"
-    Write-Output 'UI smoke passed (isolated desktop): widget-first start, detail window, live updates, filters, themes, accent, opacity range, backdrop, end retention, expand/collapse, pin, resize grip, focus button state and scroll.'
+    Write-Output 'UI smoke passed (isolated desktop): widget-first start, detail window, open source licenses, live updates, filters, themes, accent, opacity range, backdrop, end retention, expand/collapse, pin, resize grip, focus button state and scroll.'
     Get-ChildItem -LiteralPath $data_directory -Filter '*.png' | ForEach-Object FullName
 }
 finally {

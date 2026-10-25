@@ -8,6 +8,7 @@
 #include "core/claude_monitor.h"
 #include "core/codex_hooks.h"
 #include "core/codex_monitor.h"
+#include "core/notices.h"
 #include "core/store.h"
 #include "luil/luil.h"
 
@@ -112,6 +113,24 @@ namespace session_board {
     {
         luil::win32::window_placement placement {};
     };
+    // 상세 창 본문을 세션 목록과 오픈 소스 라이선스 사이에서 바꾼다.
+    struct licenses_intent
+    {
+        // 참이면 닫지 않고 상세 창까지 연다. 트레이 메뉴는 열린 상태를 모르고 연다.
+        bool keep_open { false };
+    };
+    // 라이선스 화면에서 볼 구성 요소다 (고지의 절 순서).
+    struct select_license_intent
+    {
+        std::size_t index { 0 };
+    };
+    struct license_scroll_intent
+    {
+        float value { 0.0f };
+        bool absolute { false };
+        // 참이면 원문, 거짓이면 구성 요소 목록이다.
+        bool text { false };
+    };
 
     // 위젯 외양이다. 다음 실행에 그대로 되살린다.
     struct widget_appearance
@@ -136,7 +155,8 @@ namespace session_board {
 
     [[nodiscard]] luil::caption_config board_caption();
     // 상세 창의 caption이다. 보조 창의 비클라이언트 판정과 tree의 caption이 같은 값을 쓴다.
-    [[nodiscard]] luil::caption_config detail_caption(bool dark);
+    //  - `licenses`면 본문이 라이선스 화면이라 그 단추가 세션 목록으로 돌아가는 단추가 된다.
+    [[nodiscard]] luil::caption_config detail_caption(bool dark, bool licenses = false);
 
     class board_driver final : public luil::logic_driver
     {
@@ -163,6 +183,9 @@ namespace session_board {
         [[nodiscard]] std::unique_ptr<luil::root_element> make_widget_tree(std::int64_t now);
         // 상세 창의 tree다. 보조 창 client의 (0,0)에서 시작한다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_detail_tree(std::int64_t now);
+        // 상세 창 본문 자리의 라이선스 화면이다. 왼쪽은 구성 요소, 오른쪽은 고른 것의 원문이다.
+        //  - 흘린 양을 배치 뒤에 되읽도록 두 목록을 `list_view`·`text_view`로 알린다. 고지가 없으면 비워 둔다.
+        [[nodiscard]] std::unique_ptr<luil::ui_element> make_license_body(float width, float height, luil::virtual_list_element*& list_view, luil::virtual_list_element*& text_view);
         // 세션 열쇠로 그 세션이 열린 창을 찾아 앞으로 가져온다. 못 찾으면 이유를 알림 줄에 남긴다.
         void focus_session(const std::u8string& key);
         // provider별 마지막 수신을 한 줄씩 `\n`으로 이은 글이다. 상세 화면 상태 표시줄과 위젯 바닥이 함께 쓴다.
@@ -208,6 +231,16 @@ namespace session_board {
         // 비어 있으면 외양을 저장하지 않는다 (테스트 데이터로 연 실행).
         std::filesystem::path appearance_file_ {};
         widget_appearance saved_appearance_ {};
+        bool licenses_open_ { false };
+        // 실행 파일 resource의 고지를 처음 열 때 한 번 나눠 둔다. 못 읽었으면 빈 목록이라 화면이 그렇게 말한다.
+        std::optional<std::vector<notice_component>> licenses_ {};
+        std::size_t license_ { 0 };
+        float license_list_scroll_ { 0.0f };
+        float license_text_scroll_ { 0.0f };
+        // 고른 원문을 나눈 줄이다. 구성 요소나 한 줄 칸 수가 바뀔 때만 다시 나눈다.
+        std::shared_ptr<const std::vector<luil::virtual_list_item>> license_lines_ {};
+        std::size_t license_lines_index_ { 0 };
+        std::size_t license_lines_columns_ { 0 };
         std::u8string expanded_session_ {};
         std::u8string selected_session_ {};
         float scroll_ { 0.0f };

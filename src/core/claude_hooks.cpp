@@ -141,13 +141,8 @@ namespace session_board {
             if (!CopyFileW(source.c_str(), temporary.c_str(), FALSE))
                 throw std::runtime_error { "Cannot copy helper." };
             replace_file(temporary, installed);
-            // 배포본은 실행 파일 옆에, 다중 구성 빌드는 구성 폴더 한 단계 위에 라이선스가 있다.
-            for (const auto& license : { source.parent_path() / L"json-LICENSE.txt", source.parent_path().parent_path() / L"json-LICENSE.txt" })
-                if (std::filesystem::exists(license, error))
-                {
-                    std::filesystem::copy_file(license, installed.parent_path() / L"json-LICENSE.txt", std::filesystem::copy_options::overwrite_existing, error);
-                    break;
-                }
+            // 고지는 실행 파일 resource에 실렸다. 앞 판이 옆에 복사해 둔 라이선스 파일은 지운다.
+            std::filesystem::remove(installed.parent_path() / L"json-LICENSE.txt", error);
             return true;
         }
 

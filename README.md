@@ -48,7 +48,8 @@ ctest --preset vs2026-release
 cmake --install build/vs2026 --config Release
 ```
 
-`cmake --install`은 `session-board.exe`와 `json-LICENSE.txt`를 프로젝트의 `bin/`에 복사합니다. Hook도 같은 실행 파일이 `--hook` 인자로 처리하므로 배포 파일은 이 둘뿐입니다.
+`cmake --install`은 `session-board.exe`를 프로젝트의 `bin/`에 복사합니다. Hook도 같은 실행 파일이 `--hook` 인자로 처리하므로 배포 파일은 이 하나뿐입니다.
+제3자 라이선스 고지는 실행 파일 resource에 들어 있고, 상세 화면 제목 표시줄이나 알림 영역 메뉴의 **오픈 소스 라이선스**에서 볼 수 있습니다.
 `--prefix <폴더>`로 다른 곳에 설치할 수 있습니다.
 설치한 앱을 실행 중이면 파일이 잠겨 덮어쓰지 못하므로 먼저 종료하세요.
 Hook 스크립트로 설치본을 등록하려면 `-Executable bin/session-board.exe`를 지정합니다.
@@ -122,7 +123,7 @@ Codex 앱에서 연 스레드(로컬 기록의 `originator`가 `Codex Desktop`)�
 
 ## Codex Hook 등록
 
-일반 실행에서는 앱이 **Codex Hook을 자동 등록**합니다. 배포할 때 `session-board.exe`와 `json-LICENSE.txt`를 같은 폴더에 두세요.
+일반 실행에서는 앱이 **Codex Hook을 자동 등록**합니다. 배포 파일은 `session-board.exe` 하나입니다.
 앱 자신을 `%LOCALAPPDATA%/SessionBoard/bin`에 복사하고 `CODEX_HOME` 또는 `%USERPROFILE%/.codex`의 `hooks.json`에 `session-board.exe --hook --provider codex` 8개 항목을 넣습니다.
 예전 `session-board-hook.exe` 항목은 새 명령으로 바꿔 끼우므로, 업데이트 뒤 Codex의 `/hooks`에서 한 번 다시 신뢰해야 합니다.
 기존 설정·다른 Hook을 보존하고 변경 전 `.bak`을 만듭니다. 정의가 같으면 설정 파일을 쓰지 않아 기존 신뢰 상태도 유지합니다.

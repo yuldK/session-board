@@ -98,7 +98,8 @@ if (-not $Remove) {
             }
         }
     }
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot '../third_party/luil/third_party/nlohmann_json/LICENSE.MIT') -Destination (Join-Path $InstallDirectory 'json-LICENSE.txt') -Force
+    # 고지는 실행 파일 resource에 실렸다. 앞 판이 복사해 둔 라이선스 파일은 지운다.
+    Remove-Item -LiteralPath (Join-Path $InstallDirectory 'json-LICENSE.txt') -Force -ErrorAction SilentlyContinue
 }
 $settings_directory = Split-Path -Parent $SettingsFile
 New-Item -ItemType Directory -Path $settings_directory -Force | Out-Null
