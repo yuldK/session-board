@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title description">
+    <title id="title">Session Board</title>
+    <desc id="description">Three session rows with colored activity indicators on a dark board.</desc>
+    <rect x="16" y="16" width="224" height="224" rx="48" fill="#182D3A"/>
+    <circle cx="64" cy="80" r="12" fill="#68DFC0"/>
+    <rect x="96" y="68" width="104" height="24" rx="12" fill="#68DFC0"/>
+    <circle cx="64" cy="128" r="12" fill="#F0BB7A"/>
+    <rect x="96" y="116" width="72" height="24" rx="12" fill="#E8F0F3"/>
+    <circle cx="64" cy="176" r="12" fill="#B8ABEF"/>
+    <rect x="96" y="164" width="88" height="24" rx="12" fill="#9AB1BC"/>
+</svg>

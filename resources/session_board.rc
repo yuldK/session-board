@@ -1,0 +1,3 @@
+#include "app/resource.h"
+
+IDI_SESSION_BOARD ICON "session-board.ico"

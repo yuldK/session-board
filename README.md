@@ -19,6 +19,18 @@ Claude Code와 Codex의 로컬 Hook 이벤트를 모아 보는 Windows C++20/lui
 
 데모(`send-demo.ps1`)의 행은 샘플 이벤트입니다.
 
+## 앱 아이콘
+
+![Session Board 아이콘](assets/session-board.png)
+
+짙은 청록색 보드 위의 세 행과 상태 점으로 여러 AI 세션을 함께 지켜보는 모습을 표현한 자체 제작 아이콘입니다.
+원본은 `assets/session-board.svg`이며, `assets/session-board.ico`에는 16~256px의 10개 크기가 들어 있습니다.
+아이콘은 실행 파일과 창 아이콘 리소스로 포함됩니다. SVG를 수정한 뒤 Windows PowerShell 7에서 다음 명령으로 PNG·ICO를 다시 만듭니다.
+
+```powershell
+./scripts/generate-icon.ps1
+```
+
 ## 빌드
 
 필요 환경: Windows 11 x64, Visual Studio 2026 또는 2022의 C++ 도구와 Windows SDK 22621 이상, CMake 4.2 이상, PowerShell 7.2 이상.

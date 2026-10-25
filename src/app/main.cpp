@@ -1,4 +1,5 @@
 #include "app/board_app.h"
+#include "app/resource.h"
 
 #include <windows.h>
 
@@ -22,6 +23,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         luil::win32::window_config config {};
         config.class_name = L"SessionBoard.Main";
         config.caption = session_board::board_caption();
+        config.icon_resource = IDI_SESSION_BOARD;
         // 주 창은 위젯이다. 상세 화면은 위젯에서 여는 독립 창이다.
         config.initial_width = session_board::widget_width;
         config.initial_height = session_board::widget_height;

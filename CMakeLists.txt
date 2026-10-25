@@ -37,8 +37,10 @@ set(LUIL_NLOHMANN_JSON_ROOT "${PROJECT_SOURCE_DIR}/third_party/luil/third_party/
 luil_generate_third_party_notices("${CMAKE_BINARY_DIR}/generated/third_party_notices.txt")
 luil_configure_resource_script("${CMAKE_BINARY_DIR}/generated/luil_resources.rc" "${CMAKE_BINARY_DIR}/generated/third_party_notices.txt")
 
-add_executable(session_board WIN32 src/app/main.cpp src/app/board_app.cpp src/app/board_app.h src/app/widget_window.cpp src/app/widget_window.h "${CMAKE_BINARY_DIR}/generated/luil_resources.rc")
+add_executable(session_board WIN32 src/app/main.cpp src/app/resource.h src/app/board_app.cpp src/app/board_app.h src/app/widget_window.cpp src/app/widget_window.h
+    resources/session_board.rc "${CMAKE_BINARY_DIR}/generated/luil_resources.rc")
 set_target_properties(session_board PROPERTIES OUTPUT_NAME session-board)
+target_include_directories(session_board PRIVATE "${PROJECT_SOURCE_DIR}/assets")
 target_link_libraries(session_board PRIVATE session_board_core luil::luil comctl32 dwmapi)
 
 add_executable(session_board_hook src/hook/main.cpp)
