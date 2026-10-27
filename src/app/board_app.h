@@ -9,6 +9,7 @@
 #include "core/codex_hooks.h"
 #include "core/codex_monitor.h"
 #include "core/notices.h"
+#include "core/session_updates.h"
 #include "core/store.h"
 #include "luil/luil.h"
 
@@ -25,11 +26,20 @@ namespace session_board {
         float width { 0.0f };
         float height { 0.0f };
         float scale { 1.0f };
+        bool header_bottom { false };
+        float notification_room { 0.0f };
+        std::uint64_t layout_revision { 0 };
     };
     struct close_intent
     {};
     struct refresh_intent
     {};
+    struct acknowledge_update_intent
+    {
+        std::string provider {};
+        std::string session_id {};
+        std::uint64_t sequence { 0 };
+    };
     struct provider_intent
     {
         std::string provider {};
@@ -58,11 +68,13 @@ namespace session_board {
         bool absolute { false };
         // 상세 창 목록이면 참이다. 위젯과 상세 창은 스크롤을 따로 갖는다.
         bool detail { false };
+        bool updates { false };
     };
     struct widget_state_intent
     {
         bool collapsed { false };
         bool pinned { true };
+        std::optional<metrics_intent> metrics {};
     };
     struct expand_session_intent
     {
@@ -151,9 +163,11 @@ namespace session_board {
     // 창(위젯·상세)의 마지막 자리와 크기다. 값이 없거나 깨졌으면 빈 값이라 기본 자리로 연다.
     [[nodiscard]] std::optional<luil::win32::window_placement> load_window_placement(const std::filesystem::path& file);
     // 실패해도 창 동작을 막지 않는다. 다음 이동 때 다시 쓴다.
-    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept;
+    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, bool header_bottom = false) noexcept;
+    [[nodiscard]] bool load_widget_header_bottom(const std::filesystem::path& file) noexcept;
 
     [[nodiscard]] luil::caption_config board_caption();
+    [[nodiscard]] luil::caption_config widget_caption();
     // 상세 창의 caption이다. 보조 창의 비클라이언트 판정과 tree의 caption이 같은 값을 쓴다.
     //  - `licenses`면 본문이 라이선스 화면이라 그 단추가 세션 목록으로 돌아가는 단추가 된다.
     [[nodiscard]] luil::caption_config detail_caption(bool dark, bool licenses = false);
@@ -181,6 +195,7 @@ namespace session_board {
         void save_appearance();
         // 주 창(위젯)의 tree다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_widget_tree(std::int64_t now);
+        void make_update_popup(luil::ui_frame& frame, std::int64_t now);
         // 상세 창의 tree다. 보조 창 client의 (0,0)에서 시작한다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_detail_tree(std::int64_t now);
         // 상세 창 본문 자리의 라이선스 화면이다. 왼쪽은 구성 요소, 오른쪽은 고른 것의 원문이다.
@@ -192,6 +207,7 @@ namespace session_board {
         [[nodiscard]] std::u8string signal_text(std::int64_t now) const;
         std::filesystem::path directory_ {};
         load_result data_ {};
+        session_updates updates_ {};
         std::filesystem::path codex_directory_ {};
         std::unique_ptr<codex_monitor> codex_ {};
         codex_observation codex_data_ {};
@@ -245,6 +261,7 @@ namespace session_board {
         std::u8string selected_session_ {};
         float scroll_ { 0.0f };
         float detail_scroll_ { 0.0f };
+        float update_scroll_ { 0.0f };
         HANDLE changes_ { INVALID_HANDLE_VALUE };
         std::chrono::steady_clock::time_point next_tick_ {};
         std::atomic<bool> closed_ { false };
@@ -256,7 +273,7 @@ namespace session_board {
         // `placement_file`이 비어 있으면 자리를 저장하지 않는다 (테스트 데이터로 연 실행).
         // `restored`는 저장한 자리로 연 실행이다.
         // `appearance`의 흐림·진하기로 위젯 창의 DWM 합성을 처음부터 맞춘다.
-        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance, widget_appearance appearance = {});
+        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance, widget_appearance appearance = {}, bool header_bottom = false);
         void on_started(luil::app_host& host) override;
         void execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command) override;
         [[nodiscard]] luil::app_message make_window_metrics_message(float width, float height, float scale) override;
@@ -267,6 +284,7 @@ namespace session_board {
         tray_icon tray_ {};
         std::filesystem::path placement_file_ {};
         bool restored_ { false };
+        bool header_bottom_ { false };
         widget_appearance appearance_ {};
         single_instance* instance_ { nullptr };
     };

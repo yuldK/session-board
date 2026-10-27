@@ -30,7 +30,9 @@ add_library(session_board_core STATIC src/core/session.cpp src/core/session.h sr
     src/core/codex_hooks.cpp src/core/codex_hooks.h src/core/hook_installation.h
     src/core/hook_command.cpp src/core/hook_command.h
     src/core/host_window.cpp src/core/host_window.h
-    src/core/notices.cpp src/core/notices.h)
+    src/core/notices.cpp src/core/notices.h
+    src/core/widget_layout.cpp src/core/widget_layout.h
+    src/core/session_updates.cpp src/core/session_updates.h)
 target_include_directories(session_board_core PUBLIC src)
 target_link_libraries(session_board_core PUBLIC session_board_options luil::nlohmann_json shell32 ole32)
 

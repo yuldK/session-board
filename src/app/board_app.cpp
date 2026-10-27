@@ -1237,6 +1237,15 @@ namespace session_board {
         return caption;
     }
 
+    luil::caption_config widget_caption()
+    {
+        auto caption { board_caption() };
+        caption.metrics.height = widget_caption_height;
+        caption.metrics.application_icon_slot_width = 0;
+        caption.buttons = { false, false, false };
+        return caption;
+    }
+
     board_driver::board_driver(std::filesystem::path directory, const bool open_detail, std::filesystem::path codex_directory, std::filesystem::path claude_directory,
         std::optional<claude_hook_result> claude_hooks, std::optional<codex_hook_result> codex_hooks, std::filesystem::path detail_placement_file, widget_appearance appearance,
         std::filesystem::path appearance_file)
@@ -1325,6 +1334,10 @@ namespace session_board {
                 if (session.provider == "claude")
                     session.desktop_session_id = desktop_->find(session.session_id);
         }
+        const auto previous_response { !updates_.pending().empty() && updates_.pending().front().response_required ? updates_.pending().front().sequence : 0 };
+        updates_.observe(data_.sessions, collapsed_);
+        if (!updates_.pending().empty() && updates_.pending().front().response_required && updates_.pending().front().sequence != previous_response)
+            update_scroll_ = 0.0f;
     }
 
     void board_driver::handle(luil::app_message message)
@@ -1335,9 +1348,14 @@ namespace session_board {
             closed_.store(true);
         }
         else if (const auto* metrics { message.get<metrics_intent>() }; metrics != nullptr)
-            metrics_ = *metrics;
+        {
+            if (metrics->layout_revision >= metrics_.layout_revision)
+                metrics_ = *metrics;
+        }
         else if (message.get<refresh_intent>() != nullptr)
             reload();
+        else if (const auto* update { message.get<acknowledge_update_intent>() }; update != nullptr)
+            updates_.acknowledge(update->provider, update->session_id, update->sequence);
         else if (const auto* filter { message.get<provider_intent>() }; filter != nullptr)
         {
             provider_ = filter->provider;
@@ -1396,8 +1414,16 @@ namespace session_board {
             focus_session(focus->key);
         else if (const auto* widget { message.get<widget_state_intent>() }; widget != nullptr)
         {
+            if (widget->collapsed && !collapsed_)
+                update_scroll_ = 0.0f;
             collapsed_ = widget->collapsed;
             pinned_ = widget->pinned;
+            if (widget->metrics.has_value())
+                metrics_ = *widget->metrics;
+            if (!collapsed_)
+                updates_.clear();
+            else
+                updates_.observe(data_.sessions, true);
         }
         else if (const auto* expand { message.get<expand_session_intent>() }; expand != nullptr)
             expanded_session_ = expanded_session_ == expand->owner ? std::u8string {} : expand->owner;
@@ -1411,7 +1437,7 @@ namespace session_board {
         }
         else if (const auto* scroll { message.get<scroll_intent>() }; scroll != nullptr)
         {
-            float& offset { scroll->detail ? detail_scroll_ : scroll_ };
+            float& offset { scroll->updates ? update_scroll_ : scroll->detail ? detail_scroll_ : scroll_ };
             offset = std::max(0.0f, scroll->absolute ? scroll->value : offset + scroll->value);
         }
         else if (const auto* licenses { message.get<licenses_intent>() }; licenses != nullptr)
@@ -1492,6 +1518,7 @@ namespace session_board {
     std::shared_ptr<const luil::ui_frame> board_driver::make_frame()
     {
         const auto now { now_ms() };
+        updates_.expire(std::chrono::steady_clock::now());
         if (!notice_.empty() && std::chrono::steady_clock::now() >= notice_until_)
             notice_.clear();
         auto frame { std::make_shared<luil::ui_frame>() };
@@ -1499,6 +1526,8 @@ namespace session_board {
         frame->appearance.accent_id = accent_id_;
         frame->style = style_;
         frame->tree = std::make_shared<const luil::ui_tree>(make_widget_tree(now));
+        if (collapsed_ && !updates_.pending().empty())
+            make_update_popup(*frame, now);
         if (detail_open_)
         {
             // 위젯으로 지켜보다가 자세히 볼 때 여는 독립 창이다. 작업 표시줄에 따로 선다.
@@ -1817,7 +1846,7 @@ namespace session_board {
         const float width { metrics_.width > 0.0f ? metrics_.width : static_cast<float>(widget_width) * scale };
         const float height { metrics_.height > 0.0f ? metrics_.height : static_cast<float>(widget_height) * scale };
         const float inner_width { width / scale };
-        auto root { std::make_unique<luil::root_element>() };
+        auto root { std::make_unique<luil::root_element>(u8"widget-layout-" + u8(std::to_string(metrics_.layout_revision))) };
         root->arrange({ { 0.0f, 0.0f, width, height }, scale });
 
         std::vector<const session_snapshot*> visible {};
@@ -1830,10 +1859,15 @@ namespace session_board {
         const auto attention { std::ranges::count_if(visible, [now](const auto* session) { return group_of(*session, now) == session_group::attention; }) };
         const auto running { std::ranges::count_if(visible, [now](const auto* session) { return group_of(*session, now) == session_group::running; }) };
 
+        // 머릿줄 내용은 캡션 위에 겹친다. luil이 이 캡션의 실제 배치에서 끌기 띠와 시스템 메뉴 자리를 읽는다.
+        auto window_caption { std::make_unique<luil::caption_element>(widget_caption()) };
+        window_caption->arrange({ { 0.0f, metrics_.header_bottom ? height - caption_height * scale : 0.0f, width, caption_height * scale }, scale });
+        root->add(std::move(window_caption));
+
         // 머릿줄과 바닥 줄이 창 너비 전체를 덮고 그 사이를 목록 영역이 채운다. 창 모서리는 DWM이 둥글게 자른다.
         auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-content" }, luil::stack_config {}) };
 
-        // 머릿줄: 키 컬러로 채워 목록과 가른다. 빈 자리를 잡아 창을 옮긴다 (widget_window의 HTCAPTION).
+        // 머릿줄: 키 컬러로 채워 목록과 가른다. 빈 자리의 끌기 판정은 luil의 캡션 배치를 따른다.
         const luil::stack_config caption_config { .direction = luil::stack_direction::row, .spacing = 2.0f, .padding = { 12.0f, 0.0f, 8.0f, 0.0f }, .cross_alignment = luil::stack_alignment::center };
         auto caption { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-header" }, caption_config) };
         caption->add(std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_label, u8"widget-grip" }, luil::glyph_config { .glyph = luil::codicons::icon_gripper, .font_size = 14.0f }),
@@ -1843,20 +1877,25 @@ namespace session_board {
         if (inner_width >= 340.0f)
             caption->add_fit(label(u8"widget-count", u8"확인 " + u8(std::to_string(attention)) + u8" · 진행 " + u8(std::to_string(running)), 11.0f, luil::label_color_role::dim));
         caption->add_gap(4.0f);
-        const auto add_button = [&](std::unique_ptr<luil::button_element> button) { caption->add(std::move(button), { .length = widget_icon_button, .cross_length = widget_icon_button }); };
+        const auto add_button = [&](std::unique_ptr<luil::button_element> button) {
+            button->set_caption_client(true);
+            caption->add(std::move(button), { .length = widget_icon_button, .cross_length = widget_icon_button });
+        };
         add_button(widget_button(
             u8"widget-detail", detail_open_ ? u8"상세 화면 닫기" : u8"상세 화면 열기", luil::codicons::icon_editor_layout, luil::make_message_action(open_detail_intent {}), detail_open_));
         add_button(widget_button(u8"widget-theme", u8"테마 · 키 컬러", luil::codicons::icon_color_mode, luil::make_message_action(theme_settings_intent {}), theme_settings_open_));
         add_button(widget_button(u8"widget-backdrop", u8"배경 효과 · 진하기", luil::codicons::icon_symbol_color, luil::make_message_action(backdrop_settings_intent {}), backdrop_settings_open_));
         add_button(widget_button(u8"widget-pin", pinned_ ? u8"항상 위에 표시 해제" : u8"항상 위에 표시", luil::codicons::icon_pin, command_action(toggle_pin_command), pinned_));
-        add_button(widget_button(u8"widget-collapse", collapsed_ ? u8"목록 펼치기" : u8"목록 접기", collapsed_ ? luil::codicons::icon_chevron_down : luil::codicons::icon_chevron_up,
+        const bool points_down { collapsed_ != metrics_.header_bottom };
+        add_button(widget_button(u8"widget-collapse", collapsed_ ? u8"목록 펼치기" : u8"목록 접기", points_down ? luil::codicons::icon_chevron_down : luil::codicons::icon_chevron_up,
             command_action(toggle_collapse_command)));
         add_button(widget_button(u8"compact-close", u8"위젯 닫기", luil::codicons::icon_chrome_close, command_action(0)));
         luil::panel_config caption_surface {};
         caption_surface.background = [](const luil::ui_color_palette& palette) { return palette.accent; };
         auto caption_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-caption" }, caption_surface) };
         caption_panel->set_content(std::make_unique<palette_scope>(u8"widget-caption-tint", caption_tint, std::move(caption)));
-        content->add(std::move(caption_panel), caption_height);
+        if (!metrics_.header_bottom)
+            content->add(std::move(caption_panel), caption_height);
 
         luil::scroll_area_element* scroll_metrics { nullptr };
         if (!collapsed_)
@@ -2008,7 +2047,6 @@ namespace session_board {
             region_surface.background = [alpha = fully_opaque(opacity_) ? 1.0f : opacity_](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.window_background, alpha); };
             auto region_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-region" }, region_surface) };
             region_panel->set_content(std::move(region));
-            content->add_flexible(std::move(region_panel));
 
             // 바닥 줄: provider별 마지막 수신이다. 알릴 일·오류가 있으면 같은 자리에서 오류색으로 말한다.
             // 오른쪽 끝은 크기 조절 표시 자리로 비운다.
@@ -2033,23 +2071,122 @@ namespace session_board {
             footer_surface.background = [](const luil::ui_color_palette& palette) { return palette.surface_background; };
             auto footer_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-footer" }, footer_surface) };
             footer_panel->set_content(std::move(footer));
-            content->add(divider(u8"widget-footer-rule"), 1.0f);
-            content->add(std::move(footer_panel), widget_footer_height);
+            if (metrics_.header_bottom)
+            {
+                content->add(std::move(footer_panel), widget_footer_height);
+                content->add(divider(u8"widget-footer-rule"), 1.0f);
+                content->add_flexible(std::move(region_panel));
+            }
+            else
+            {
+                content->add_flexible(std::move(region_panel));
+                content->add(divider(u8"widget-footer-rule"), 1.0f);
+                content->add(std::move(footer_panel), widget_footer_height);
+            }
         }
+        if (metrics_.header_bottom)
+            content->add(std::move(caption_panel), caption_height);
         content->arrange({ { 0.0f, 0.0f, width, height }, scale });
         if (scroll_metrics != nullptr)
             scroll_ = scroll_metrics->metrics().scroll_offset;
         root->add(std::move(content));
         if (!collapsed_)
         {
-            // 오른쪽 아래 모서리를 끌면 widget_window가 크기 조절로 답한다. 이 표시는 자리를 알릴 뿐이다.
+            // 머릿줄 반대쪽의 오른쪽 모서리에서 크기를 조절한다. 이 표시는 자리를 알릴 뿐이다.
             const luil::glyph_config grip { .glyph = luil::codicons::icon_grabber, .font_size = 12.0f, .description = u8"크기 조절" };
             auto resize { std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_label, u8"widget-resize" }, grip) };
             resize->set_tooltip(u8"크기 조절");
-            resize->arrange({ { width - 14.0f * scale, height - 14.0f * scale, 14.0f * scale, 14.0f * scale }, scale });
+            resize->arrange({ { width - 14.0f * scale, metrics_.header_bottom ? 0.0f : height - 14.0f * scale, 14.0f * scale, 14.0f * scale }, scale });
             root->add(std::move(resize));
         }
         return root;
+    }
+
+    void board_driver::make_update_popup(luil::ui_frame& frame, const std::int64_t now)
+    {
+        constexpr float row_height { 112.0f };
+        constexpr float heading_height { 28.0f };
+        constexpr float gap { 6.0f };
+        const float scale { metrics_.scale > 0.0f ? metrics_.scale : 1.0f };
+        const float width { metrics_.width / scale };
+        const float height { std::min(heading_height + row_height * static_cast<float>(std::min<std::size_t>(3, updates_.pending().size())), metrics_.notification_room / scale - gap) };
+        if (width <= 0.0f || height < heading_height + 24.0f)
+            return;
+        auto rows { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"update-rows" }, luil::stack_config {}) };
+        for (const auto& update : updates_.pending())
+        {
+            const auto& session { update.session };
+            const auto id { u8"update-" + u8(std::to_string(update.sequence)) };
+            const acknowledge_update_intent acknowledgement { session.provider, session.session_id, update.sequence };
+            auto body { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-body" }, luil::stack_config { .spacing = 4.0f, .padding = luil::edge_insets::all(10.0f) }) };
+            const luil::stack_config heading_config { .direction = luil::stack_direction::row, .spacing = 8.0f };
+            auto heading { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-heading" }, heading_config) };
+            heading->add_flexible(provider_line(id + u8"-project", session.provider, provider_text(session) + u8" · " + project_text(session), 11.0f));
+            const luil::text_button_config confirm_config { .text = update.response_required ? u8"응답 대기" : u8"닫기" };
+            auto confirm { std::make_unique<luil::text_button_element>(luil::ui_element_id { kind_button, id + u8"-confirm" }, confirm_config) };
+            confirm->set_action(luil::ui_trigger::left_click, luil::make_message_action(acknowledgement));
+            confirm->set_tooltip(update.response_required ? u8"세션에서 승인하거나 응답하면 잠시 뒤 자동으로 숨깁니다" : u8"응답이 처리된 알림을 숨깁니다");
+            confirm->set_enabled(!update.response_required);
+            confirm->set_cursor(luil::ui_cursor::hand);
+            heading->add(std::move(confirm), update.response_required ? 72.0f : 44.0f);
+            body->add(std::move(heading), 24.0f);
+            body->add(label(id + u8"-text", task_text(session), 12.0f), 18.0f);
+            if (update.response_required)
+                body->add(status_cell(id + u8"-status", session, now), 18.0f);
+            else
+                body->add(label(id + u8"-status", u8"응답 처리됨", 11.0f, luil::label_color_role::dim), 18.0f);
+            body->add(label(id + u8"-activity", update.response_required ? activity_text(session, now) : u8"잠시 후 알림을 숨깁니다", 11.0f, luil::label_color_role::dim), 16.0f);
+            auto card { panel(id, std::move(body)) };
+            card->set_access_name(provider_text(session) + u8" · " + task_text(session));
+            rows->add(std::move(card), row_height);
+        }
+        const float content_height { row_height * static_cast<float>(updates_.pending().size()) };
+        luil::scroll_area_element* scroll_metrics { nullptr };
+        auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"update-content" }, luil::stack_config {}) };
+        auto heading { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"update-heading" }, luil::stack_config { .padding = { 10.0f, 0.0f, 10.0f, 0.0f } }) };
+        const auto waiting { std::ranges::count_if(updates_.pending(), [](const auto& update) { return update.response_required; }) };
+        const auto resolved { updates_.pending().size() - static_cast<std::size_t>(waiting) };
+        std::u8string heading_text { u8"응답 처리됨 " + u8(std::to_string(resolved)) + u8"개" };
+        if (waiting > 0)
+        {
+            heading_text = u8"확인 필요 " + u8(std::to_string(waiting)) + u8"개";
+            if (resolved > 0)
+                heading_text += u8" · 처리됨 " + u8(std::to_string(resolved)) + u8"개";
+        }
+        heading->add_flexible(label(u8"update-count", heading_text, 11.0f, luil::label_color_role::dim));
+        content->add(std::move(heading), heading_height);
+        if (content_height > height - heading_height)
+        {
+            luil::scroll_area_config config { .owner = u8"update-scroll", .content_height = content_height, .scroll_offset = update_scroll_ };
+            config.scroll = [](const float delta) { return luil::make_app_action(scroll_intent { .value = delta, .updates = true }); };
+            config.scroll_to = [](const float value) { return luil::make_app_action(scroll_intent { .value = value, .absolute = true, .updates = true }); };
+            auto scroll { std::make_unique<luil::scroll_area_element>(std::move(config)) };
+            scroll_metrics = scroll.get();
+            scroll->set_content(std::move(rows));
+            content->add_flexible(std::move(scroll));
+        }
+        else
+        {
+            update_scroll_ = 0.0f;
+            content->add(std::move(rows), content_height);
+        }
+        luil::panel_config surface {};
+        surface.background = [](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.window_background, 1.0f); };
+        auto background { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"update-background" }, surface) };
+        background->set_content(std::move(content));
+        auto root { std::make_unique<luil::root_element>() };
+        root->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
+        background->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
+        if (scroll_metrics != nullptr)
+            update_scroll_ = scroll_metrics->metrics().scroll_offset;
+        root->add(std::move(background));
+        luil::ui_popup popup {};
+        popup.id = u8"session-updates";
+        popup.y = metrics_.header_bottom ? -height - gap : static_cast<float>(widget_caption_height) + gap;
+        popup.width = width;
+        popup.height = height;
+        popup.tree = std::make_shared<const luil::ui_tree>(std::move(root));
+        frame.popups.push_back(std::move(popup));
     }
 
     std::u8string board_driver::signal_text(const std::int64_t now) const
@@ -2116,13 +2253,15 @@ namespace session_board {
         }
     }
 
-    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement) noexcept
+    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, const bool header_bottom) noexcept
     {
         try
         {
             nlohmann::json value { { "x", placement.x }, { "y", placement.y }, { "width", placement.width }, { "height", placement.height } };
             if (placement.maximized)
                 value["maximized"] = true;
+            if (header_bottom)
+                value["header_bottom"] = true;
             write_json_file(file, value);
         }
         catch (...)
@@ -2178,9 +2317,23 @@ namespace session_board {
         {}
     }
 
-    board_delegate::board_delegate(std::filesystem::path placement_file, const bool restored, single_instance* instance, widget_appearance appearance)
+    bool load_widget_header_bottom(const std::filesystem::path& file) noexcept
+    {
+        try
+        {
+            std::ifstream input { file, std::ios::binary };
+            return input && nlohmann::json::parse(input).value("header_bottom", false);
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    board_delegate::board_delegate(std::filesystem::path placement_file, const bool restored, single_instance* instance, widget_appearance appearance, const bool header_bottom)
         : placement_file_ { std::move(placement_file) }
         , restored_ { restored }
+        , header_bottom_ { header_bottom }
         , appearance_ { std::move(appearance) }
         , instance_ { instance }
     {}
@@ -2190,7 +2343,18 @@ namespace session_board {
         // 창을 붙이기 전에 값만 둔다. 붙일 때 이 값으로 합성을 처음 건다.
         window_.set_backdrop(appearance_.backdrop);
         window_.set_opacity(appearance_.opacity);
-        if (!window_.attach(restored_))
+        if (!window_.attach(
+                restored_, header_bottom_,
+                [this, &host] {
+                    RECT client {};
+                    GetClientRect(window_.handle(), &client);
+                    const float scale { static_cast<float>(GetDpiForWindow(window_.handle())) / 96.0f };
+                    host.post_app_message(make_window_metrics_message(static_cast<float>(client.right), static_cast<float>(client.bottom), scale));
+                },
+                [&host](const std::uint64_t revision) {
+                    const auto frame { host.acquire_frame() };
+                    return frame != nullptr && frame->tree != nullptr && frame->tree->root() != nullptr && frame->tree->root()->id().owner == u8"widget-layout-" + u8(std::to_string(revision));
+                }))
         {
             host.post_app_message(luil::app_message { widget_failed_intent {} });
             return;
@@ -2209,8 +2373,12 @@ namespace session_board {
             return {};
         auto saved { placement };
         if (window_.collapsed())
+        {
             saved.height = window_.expanded_height();
-        save_window_placement(placement_file_, saved);
+            if (window_.header_bottom())
+                saved.y -= saved.height - placement.height;
+        }
+        save_window_placement(placement_file_, saved, window_.header_bottom());
         return {};
     }
 
@@ -2218,11 +2386,16 @@ namespace session_board {
     {
         if (command.command == toggle_collapse_command || command.command == toggle_pin_command)
         {
+            std::optional<metrics_intent> metrics {};
             if (command.command == toggle_collapse_command)
+            {
                 window_.toggle_collapse();
+                const auto message { make_window_metrics_message(0.0f, 0.0f, static_cast<float>(GetDpiForWindow(window_.handle())) / 96.0f) };
+                metrics = *message.get<metrics_intent>();
+            }
             else
                 window_.toggle_pin();
-            host.post_app_message(luil::app_message { widget_state_intent { window_.collapsed(), window_.pinned() } });
+            host.post_app_message(luil::app_message { widget_state_intent { window_.collapsed(), window_.pinned(), metrics } });
         }
         else if (command.command == backdrop_acrylic_command || command.command == backdrop_transparent_command || command.command == backdrop_blur_command)
         {
@@ -2245,7 +2418,15 @@ namespace session_board {
 
     luil::app_message board_delegate::make_window_metrics_message(const float width, const float height, const float scale)
     {
-        return luil::app_message { metrics_intent { width, height, scale } };
+        const auto pending { window_.pending_bounds() };
+        metrics_intent metrics {};
+        metrics.width = pending.has_value() ? static_cast<float>(pending->right - pending->left) : width;
+        metrics.height = pending.has_value() ? static_cast<float>(pending->bottom - pending->top) : height;
+        metrics.scale = scale;
+        metrics.header_bottom = window_.header_bottom();
+        metrics.notification_room = static_cast<float>(window_.notification_room());
+        metrics.layout_revision = window_.layout_revision();
+        return luil::app_message { metrics };
     }
 
     std::vector<luil::input_action> board_policy::on_wheel(const luil::ui_tree& tree, const luil::mouse_wheel_event& event, const float delta)

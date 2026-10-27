@@ -1,6 +1,8 @@
 #include "core/codex_monitor.h"
 #include "core/notices.h"
+#include "core/session_updates.h"
 #include "core/store.h"
+#include "core/widget_layout.h"
 
 #include <windows.h>
 
@@ -61,6 +63,118 @@ namespace session_board {
             require(!apply_event(snapshot, event("tool_started")), "Ended session reactivated.");
             require(apply_event(snapshot, event("session_started")), "Resume rejected.");
             require(snapshot.status == session_status::idle && !snapshot.turn_closed, "Resume failed.");
+        }
+
+        void widget_anchoring()
+        {
+            const widget_area work { -1920, -200, 0, 880 };
+            auto layout { fit_widget(work, -500, 700, 400, 560, 40, false) };
+            require(layout.header_bottom && layout.y + layout.height - 40 == 700, "Bottom overflow moved the header while flipping upward.");
+            layout = fit_widget(work, -500, -100, 400, 560, 40, true);
+            require(!layout.header_bottom && layout.y == -100, "Top overflow moved the header while flipping downward.");
+            layout = fit_widget(work, -500, 100, 400, 300, 40, true);
+            require(layout.header_bottom, "A fitting upward list changed direction unnecessarily.");
+            for (const int caption : { 40, 60, 80 })
+                for (int y { work.top }; y <= work.bottom - caption; y += 17)
+                    for (const bool bottom : { false, true })
+                    {
+                        const auto fitted { fit_widget(work, -500, y, 3000, 3000, caption, bottom) };
+                        require(fitted.x >= work.left && fitted.x + fitted.width <= work.right && fitted.y >= work.top && fitted.y + fitted.height <= work.bottom,
+                            "Large widget escaped the monitor work area.");
+                        require(fitted.y + (fitted.header_bottom ? fitted.height - caption : 0) == y, "Clamping a large widget moved the header.");
+                    }
+            layout = fit_widget({ 0, 0, 200, 20 }, 500, 100, 400, 560, 40, false);
+            require(layout.width == 200 && layout.height == 20 && layout.x == 0 && layout.y == 0, "Tiny work area was not respected.");
+        }
+
+        void hidden_updates()
+        {
+            session_updates updates {};
+            session_snapshot session { .provider = "codex", .session_id = "update-test", .summary = "First", .status = session_status::running };
+            updates.observe({ session }, true);
+            session.summary = "Second";
+            updates.observe({ session }, true);
+            require(updates.pending().empty(), "Running progress generated a notification.");
+            session.children.push_back({ .child_id = "child", .title = "Child" });
+            updates.observe({ session }, true);
+            require(updates.pending().empty(), "Running child generated a notification.");
+            for (const auto status : { session_status::idle, session_status::interrupted, session_status::ended, session_status::failed })
+            {
+                session.status = status;
+                updates.observe({ session }, true);
+                require(updates.pending().empty(), "A status without a response request generated a notification.");
+            }
+            session.status = session_status::waiting_approval;
+            updates.observe({ session }, true);
+            require(updates.pending().size() == 1 && updates.pending().front().response_required, "Approval request was not announced.");
+            const auto first { updates.pending().front().sequence };
+            session.summary = "Question still waiting";
+            ++session.revision;
+            updates.observe({ session }, true);
+            updates.acknowledge("codex", "update-test", first);
+            require(updates.pending().size() == 1 && updates.pending().front().response_required, "Progress or acknowledgement hid an outstanding response.");
+            session.status = session_status::running;
+            updates.observe({ session }, true);
+            require(updates.pending().front().session.summary == "Question still waiting", "Resolved response was replaced by running progress.");
+            session.summary = "New progress is not a notification";
+            updates.observe({ session }, true);
+            require(updates.pending().front().session.summary == "Question still waiting", "Progress mutated a resolved request notification.");
+            updates.acknowledge("codex", "update-test", updates.pending().front().sequence);
+            updates.observe({ session }, true);
+            require(updates.pending().empty(), "Running session reappeared after a resolved request was dismissed.");
+            ++session.updated_ms;
+            ++session.revision;
+            updates.observe({ session }, true);
+            require(updates.pending().empty(), "Timestamp-only update generated a notification.");
+            updates.observe({ session }, false);
+            require(updates.pending().empty(), "Opening the list did not mark updates as read.");
+            session.summary = "Visible change";
+            updates.observe({ session }, false);
+            require(updates.pending().empty(), "Visible change generated a notification.");
+            session.session_id = "new-session";
+            updates.observe({ session }, true);
+            require(updates.pending().empty(), "A new running session generated a notification.");
+        }
+
+        void persistent_responses()
+        {
+            const auto now { std::chrono::steady_clock::now() };
+            session_updates updates {};
+            session_snapshot session { .provider = "claude", .session_id = "response-test", .status = session_status::waiting_approval };
+            updates.observe({ session }, false, now);
+            updates.observe({ session }, true, now);
+            require(updates.pending().size() == 1 && updates.pending().front().response_required, "Existing approval disappeared when collapsing.");
+            updates.acknowledge("claude", "response-test", updates.pending().front().sequence);
+            updates.expire(now + std::chrono::hours { 1 });
+            require(updates.pending().size() == 1, "Unread response requirement was dismissed or timed out.");
+            updates.clear();
+            updates.observe({ session }, true, now);
+            require(updates.pending().size() == 1, "Approval did not return after reopening and collapsing.");
+            session.status = session_status::running;
+            updates.observe({ session }, true, now);
+            require(!updates.pending().front().response_required && updates.pending().front().expires_at.has_value(), "External approval did not start notification expiry.");
+            session.summary = "Still working";
+            updates.observe({ session }, true, now + std::chrono::seconds { 4 });
+            updates.expire(now + std::chrono::seconds { 7 });
+            require(updates.pending().size() == 1, "Resolved response vanished too early.");
+            updates.expire(now + std::chrono::seconds { 8 });
+            require(updates.pending().empty(), "Resolved response expiry was extended by ordinary updates.");
+            session.status = session_status::waiting_input;
+            updates.observe({ session }, true, now);
+            require(updates.pending().front().response_required && !updates.pending().front().expires_at.has_value(), "New input request inherited an expiry.");
+            updates.observe({}, true, now);
+            updates.expire(now + std::chrono::seconds { 8 });
+            require(updates.pending().empty(), "A removed session's approval stayed forever.");
+            session.status = session_status::running;
+            session.children.push_back({ .child_id = "waiting-child", .status = session_status::waiting_input });
+            updates.observe({ session }, true, now);
+            session_snapshot other { .provider = "codex", .session_id = "ordinary", .summary = "New update" };
+            updates.observe({ session, other }, true, now);
+            require(updates.pending().size() == 1 && updates.pending().front().response_required, "Ordinary progress polluted the pending response notifications.");
+            session.children.front().status = session_status::running;
+            updates.observe({ session, other }, true, now);
+            updates.expire(now + std::chrono::seconds { 8 });
+            require(updates.pending().empty(), "Resolved child notification did not expire or an ordinary session was announced.");
         }
 
         void validation()
@@ -442,6 +556,9 @@ int main()
     try
     {
         session_board::lifecycle();
+        session_board::widget_anchoring();
+        session_board::hidden_updates();
+        session_board::persistent_responses();
         session_board::notices();
         session_board::validation();
         session_board::widget_lifecycle();

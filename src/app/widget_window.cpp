@@ -1,7 +1,7 @@
 #include "app/widget_window.h"
+#include "core/widget_layout.h"
 
 #include <dwmapi.h>
-#include <windowsx.h>
 
 #include <algorithm>
 #include <cwchar>
@@ -10,10 +10,9 @@
 namespace session_board {
     namespace {
         constexpr UINT_PTR subclass_id { 1 };
+        constexpr UINT_PTR layout_timer_id { 0x53424c59 };
         constexpr int widget_minimum_width { 320 };
         constexpr int widget_minimum_height { 180 };
-        constexpr int widget_border { 6 };
-        constexpr int widget_grip { 14 };
 
         BOOL CALLBACK find_main_window(const HWND window, const LPARAM result)
         {
@@ -80,13 +79,16 @@ namespace session_board {
             RemoveWindowSubclass(window_, subclass, subclass_id);
     }
 
-    bool widget_window::attach(const bool keep_size)
+    bool widget_window::attach(const bool keep_size, const bool header_bottom, std::function<void()> layout_changed, std::function<bool(std::uint64_t)> layout_ready)
     {
         EnumThreadWindows(GetCurrentThreadId(), find_main_window, reinterpret_cast<LPARAM>(&window_));
         if (window_ == nullptr)
             return false;
         if (!SetWindowSubclass(window_, subclass, subclass_id, reinterpret_cast<DWORD_PTR>(this)))
             return false;
+        header_bottom_ = header_bottom;
+        layout_changed_ = std::move(layout_changed);
+        layout_ready_ = std::move(layout_ready);
         const LONG_PTR visible { GetWindowLongPtrW(window_, GWL_STYLE) & WS_VISIBLE };
         SetWindowLongPtrW(window_, GWL_STYLE, WS_POPUP | WS_THICKFRAME | visible);
         const LONG_PTR extended { GetWindowLongPtrW(window_, GWL_EXSTYLE) };
@@ -145,11 +147,75 @@ namespace session_board {
     {
         RECT box {};
         GetWindowRect(window_, &box);
+        if (pending_bounds_.has_value())
+            box = *pending_bounds_;
         if (!collapsed_)
             expanded_height_ = box.bottom - box.top;
+        const int caption { MulDiv(widget_caption_height, static_cast<int>(GetDpiForWindow(window_)), 96) };
+        const int header_y { header_bottom_ ? box.bottom - caption : box.top };
+        MONITORINFO monitor { .cbSize = sizeof(monitor) };
+        if (!GetMonitorInfoW(MonitorFromRect(&box, MONITOR_DEFAULTTONEAREST), &monitor))
+            return;
         collapsed_ = !collapsed_;
-        const int height { collapsed_ ? MulDiv(widget_caption_height, static_cast<int>(GetDpiForWindow(window_)), 96) : expanded_height_ };
-        SetWindowPos(window_, nullptr, 0, 0, box.right - box.left, height, SWP_NOMOVE | SWP_NOACTIVATE | SWP_NOZORDER);
+        const int height { collapsed_ ? caption : expanded_height_ };
+        const auto& work { monitor.rcWork };
+        const auto layout { fit_widget({ work.left, work.top, work.right, work.bottom }, box.left, header_y, box.right - box.left, collapsed_ ? expanded_height_ : height, caption, header_bottom_) };
+        header_bottom_ = layout.header_bottom;
+        const int target_height { collapsed_ ? caption : layout.height };
+        const int target_y { collapsed_ && header_bottom_ ? layout.y + layout.height - caption : layout.y };
+        pending_bounds_ = RECT { layout.x, target_y, layout.x + layout.width, target_y + target_height };
+        ++layout_revision_;
+        SetTimer(window_, layout_timer_id, 10, nullptr);
+    }
+
+    void widget_window::apply_pending_layout()
+    {
+        if (!pending_bounds_.has_value() || !layout_ready_ || !layout_ready_(layout_revision_))
+            return;
+        const RECT box { *pending_bounds_ };
+        pending_bounds_.reset();
+        KillTimer(window_, layout_timer_id);
+        changing_collapse_ = true;
+        // 새 크기의 tree가 준비된 뒤에만 창을 움직인다. 이전 비트맵을 새 원점에 복사하면 아래 머릿줄이 위로 튄다.
+        SetWindowPos(window_, nullptr, box.left, box.top, box.right - box.left, box.bottom - box.top, SWP_NOACTIVATE | SWP_NOZORDER | SWP_NOREDRAW | SWP_NOCOPYBITS);
+        changing_collapse_ = false;
+        RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW | RDW_NOCHILDREN);
+    }
+
+    void widget_window::fit_position(WINDOWPOS& position)
+    {
+        if (pending_bounds_.has_value() && !changing_collapse_)
+        {
+            position.flags |= SWP_NOMOVE | SWP_NOSIZE;
+            return;
+        }
+        RECT box {};
+        GetWindowRect(window_, &box);
+        const bool moving { (position.flags & SWP_NOMOVE) == 0 };
+        const bool sizing { (position.flags & SWP_NOSIZE) == 0 };
+        if (!moving && !sizing)
+            return;
+        const int width { sizing ? position.cx : box.right - box.left };
+        const int height { sizing ? position.cy : box.bottom - box.top };
+        const int caption { MulDiv(widget_caption_height, static_cast<int>(GetDpiForWindow(window_)), 96) };
+        const int x { moving ? position.x : box.left };
+        const int y { moving ? position.y : box.top };
+        const int header_y { header_bottom_ ? y + height - caption : y };
+        const RECT header { x, header_y, x + width, header_y + caption };
+        MONITORINFO monitor { .cbSize = sizeof(monitor) };
+        if (!GetMonitorInfoW(MonitorFromRect(&header, MONITOR_DEFAULTTONEAREST), &monitor))
+            return;
+        const auto& work { monitor.rcWork };
+        const auto layout { fit_widget({ work.left, work.top, work.right, work.bottom }, x, header_y, width, collapsed_ ? expanded_height_ : height, caption, header_bottom_) };
+        header_bottom_ = layout.header_bottom;
+        const int fitted_header { layout.y + (header_bottom_ ? layout.height - caption : 0) };
+        position.x = layout.x;
+        position.y = collapsed_ ? fitted_header : layout.y;
+        position.cx = layout.width;
+        position.cy = collapsed_ ? std::min(caption, layout.height) : layout.height;
+        position.flags &= ~(SWP_NOMOVE | SWP_NOSIZE);
+        if (!changing_collapse_)
+            expanded_height_ = layout.height;
     }
 
     void widget_window::toggle_pin()
@@ -166,6 +232,33 @@ namespace session_board {
     bool widget_window::collapsed() const noexcept
     {
         return collapsed_;
+    }
+
+    bool widget_window::header_bottom() const noexcept
+    {
+        return header_bottom_;
+    }
+
+    std::uint64_t widget_window::layout_revision() const noexcept
+    {
+        return layout_revision_;
+    }
+
+    std::optional<RECT> widget_window::pending_bounds() const noexcept
+    {
+        return pending_bounds_;
+    }
+
+    int widget_window::notification_room() const noexcept
+    {
+        RECT box {};
+        GetWindowRect(window_, &box);
+        if (pending_bounds_.has_value())
+            box = *pending_bounds_;
+        MONITORINFO monitor { .cbSize = sizeof(monitor) };
+        if (!GetMonitorInfoW(MonitorFromRect(&box, MONITOR_DEFAULTTONEAREST), &monitor))
+            return 0;
+        return std::max(0L, header_bottom_ ? box.top - monitor.rcWork.top : monitor.rcWork.bottom - box.bottom);
     }
 
     int widget_window::expanded_height() const noexcept
@@ -193,9 +286,25 @@ namespace session_board {
         auto* const state { reinterpret_cast<widget_window*>(reference) };
         if (message == WM_NCDESTROY)
         {
+            KillTimer(window, layout_timer_id);
             RemoveWindowSubclass(window, subclass, id);
             state->window_ = nullptr;
             return DefSubclassProc(window, message, word, data);
+        }
+        if (message == WM_TIMER && word == layout_timer_id)
+        {
+            state->apply_pending_layout();
+            return 0;
+        }
+        if ((message == WM_PAINT || message == WM_PRINTCLIENT) && state->pending_bounds_.has_value())
+        {
+            state->apply_pending_layout();
+            if (state->pending_bounds_.has_value())
+            {
+                if (message == WM_PAINT)
+                    ValidateRect(window, nullptr);
+                return 0;
+            }
         }
         const int dpi { static_cast<int>(GetDpiForWindow(window)) };
         if (message == WM_NCCALCSIZE)
@@ -210,43 +319,58 @@ namespace session_board {
             auto* const limits { reinterpret_cast<MINMAXINFO*>(data) };
             const int minimum_height { state->collapsed_ ? widget_caption_height : widget_minimum_height };
             limits->ptMinTrackSize = { MulDiv(widget_minimum_width, dpi, 96), MulDiv(minimum_height, dpi, 96) };
+            MONITORINFO monitor { .cbSize = sizeof(monitor) };
+            if (GetMonitorInfoW(MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST), &monitor))
+            {
+                limits->ptMaxTrackSize = { monitor.rcWork.right - monitor.rcWork.left, monitor.rcWork.bottom - monitor.rcWork.top };
+                limits->ptMinTrackSize.x = std::min(limits->ptMinTrackSize.x, limits->ptMaxTrackSize.x);
+                limits->ptMinTrackSize.y = std::min(limits->ptMinTrackSize.y, limits->ptMaxTrackSize.y);
+            }
             return result;
         }
-        if (message == WM_NCHITTEST)
+        if (message == WM_WINDOWPOSCHANGING)
+            state->fit_position(*reinterpret_cast<WINDOWPOS*>(data));
+        if (message == WM_NCLBUTTONDOWN && word == HTCAPTION)
         {
-            POINT point { GET_X_LPARAM(data), GET_Y_LPARAM(data) };
-            ScreenToClient(window, &point);
-            RECT client {};
-            GetClientRect(window, &client);
-            const int edge { MulDiv(widget_border, dpi, 96) };
-            const int grip { MulDiv(widget_grip, dpi, 96) };
-            if (point.x >= client.right - grip && point.y >= client.bottom - grip)
-                return HTBOTTOMRIGHT;
-            const bool left { point.x < edge };
-            const bool right { point.x >= client.right - edge };
-            const bool top { point.y < edge };
-            const bool bottom { point.y >= client.bottom - edge };
-            if (top && left)
-                return HTTOPLEFT;
-            if (top && right)
-                return HTTOPRIGHT;
-            if (bottom && left)
-                return HTBOTTOMLEFT;
-            if (bottom && right)
-                return HTBOTTOMRIGHT;
-            if (left)
-                return HTLEFT;
-            if (right)
-                return HTRIGHT;
-            if (top)
-                return HTTOP;
-            if (bottom)
-                return HTBOTTOM;
-            if (point.y < MulDiv(widget_caption_height, dpi, 96) && point.x < client.right - MulDiv(widget_control_width, dpi, 96))
-                return HTCAPTION;
-            return HTCLIENT;
+            RECT box {};
+            GetWindowRect(window, &box);
+            POINT cursor {};
+            GetCursorPos(&cursor);
+            const int caption { MulDiv(widget_caption_height, dpi, 96) };
+            state->drag_offset_ = { cursor.x - box.left, cursor.y - (state->header_bottom_ ? box.bottom - caption : box.top) };
+            state->dragging_caption_ = true;
+            const LRESULT result { DefSubclassProc(window, message, word, data) };
+            state->dragging_caption_ = false;
+            return result;
+        }
+        if (message == WM_MOVING && state->dragging_caption_)
+        {
+            auto& box { *reinterpret_cast<RECT*>(data) };
+            POINT cursor {};
+            GetCursorPos(&cursor);
+            const int width { box.right - box.left };
+            const int height { box.bottom - box.top };
+            const int caption { MulDiv(widget_caption_height, dpi, 96) };
+            box.left = cursor.x - state->drag_offset_.x;
+            box.top = cursor.y - state->drag_offset_.y - (state->header_bottom_ ? height - caption : 0);
+            box.right = box.left + width;
+            box.bottom = box.top + height;
+        }
+        if (message == WM_NCHITTEST && state->collapsed_)
+        {
+            // 끌기·단추 판정은 게시된 캡션 tree를 따르는 luil에 맡긴다. 접힌 동안은 크기 조절만 막는다.
+            const LRESULT hit { DefSubclassProc(window, message, word, data) };
+            return hit >= HTLEFT && hit <= HTBOTTOMRIGHT ? HTCLIENT : hit;
         }
         const LRESULT result { DefSubclassProc(window, message, word, data) };
+        if (message == WM_WINDOWPOSCHANGED && state->layout_changed_)
+            state->layout_changed_();
+        if (message == WM_DISPLAYCHANGE || message == WM_SETTINGCHANGE)
+        {
+            RECT box {};
+            GetWindowRect(window, &box);
+            SetWindowPos(window, nullptr, box.left, box.top, box.right - box.left, box.bottom - box.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        }
         if (resets_composition(message))
             state->apply_composition();
         return result;

@@ -14,41 +14,7 @@ $data_directory = Join-Path $project_root ('build/ui-smoke-' + [guid]::NewGuid()
 New-Item -ItemType Directory -Path $data_directory -Force | Out-Null
 $app_path = (Resolve-Path -LiteralPath $Executable).Path
 
-# 사람 화면의 포커스·커서를 건드리지 않도록 앱을 따로 만든 데스크톱에 띄운다.
-# luil-uia의 격리 실행과 같되 실행 인자를 넘긴다 — 테스트 데이터 폴더를 써야 실제 설정과 Hook 등록을 건드리지 않는다.
-function Connect-SessionBoardIsolated([string]$arguments) {
-    # Hook도 같은 실행 파일이라 잠깐 떠 있는 `--hook` 실행은 위젯으로 치지 않는다.
-    if (Get-CimInstance Win32_Process -Filter "Name='session-board.exe'" | Where-Object { $_.CommandLine -notmatch '\s--hook(\s|$)' }) {
-        throw 'Session Board is already running. Close it before the isolated UI test.'
-    }
-    $script:luil_desktop_name = 'luil-uia-' + [guid]::NewGuid().ToString('N').Substring(0, 8)
-    $script:luil_desktop = [Luil.Uia.Native]::CreateDesktopW($script:luil_desktop_name, [IntPtr]::Zero, [IntPtr]::Zero, 0, 0x10000000, [IntPtr]::Zero)
-    if ($script:luil_desktop -eq [IntPtr]::Zero) {
-        throw 'The isolated desktop could not be created.'
-    }
-    $script:luil_queue = Join-Path ([System.IO.Path]::GetTempPath()) "luil-uia\$($script:luil_desktop_name)"
-    $null = New-Item -ItemType Directory -Path $script:luil_queue -Force
-    $script:luil_isolated = $true
-    $script:luil_step_id = 0
-    $script:luil_root = $null
-    $script:luil_process = Start-LuilProcess -path $app_path -arguments $arguments -desktop $script:luil_desktop_name
-    $script:luil_started_app = $true
-    $worker_path = (Get-Process -Id $PID).Path
-    $worker_script = Join-Path (Split-Path -Parent $UiaScript) 'desktop_worker.ps1'
-    $worker_arguments = '-NoProfile -STA -File "{0}" -queue "{1}" -process_id {2} -timeout_seconds 20' -f $worker_script, $script:luil_queue, $script:luil_process.Id
-    $script:luil_worker = Start-LuilProcess -path $worker_path -arguments $worker_arguments -desktop $script:luil_desktop_name -no_window
-    $deadline = (Get-Date).AddSeconds(60)
-    while ((Get-Date) -lt $deadline) {
-        if (Test-Path (Join-Path $script:luil_queue 'ready.txt')) {
-            return
-        }
-        if (Test-Path (Join-Path $script:luil_queue 'failed.txt')) {
-            throw ('The isolated UIA worker failed: ' + (Get-Content (Join-Path $script:luil_queue 'failed.txt') -Raw))
-        }
-        Start-Sleep -Milliseconds 200
-    }
-    throw 'The isolated UIA worker was not ready in time.'
-}
+. (Join-Path $PSScriptRoot 'isolated-uia.ps1')
 
 # 격리 데스크톱 안에서 한 단계를 돈다. 요소는 데스크톱을 건널 수 없어 글로 보낸다.
 function Step([string]$code) {
@@ -117,7 +83,7 @@ function Assert-WidgetWindow([bool]$topmost = $true) {
 }
 
 try {
-    Connect-SessionBoardIsolated ('--data-dir "' + $data_directory + '"')
+    Connect-SessionBoardIsolated -Executable $app_path -UiaScript $UiaScript -Arguments ('--data-dir "' + $data_directory + '"')
     # 위젯이 주 창이다. 상세 화면은 위젯에서 여는 독립 창이다.
     $null = Step "Wait-LuilElement -id 'widget-empty' -name '아직 수신한 세션이 없습니다'"
     Assert-WidgetWindow

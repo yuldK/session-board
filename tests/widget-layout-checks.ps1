@@ -1,0 +1,294 @@
+#requires -Version 7.2
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)][string]$Executable,
+    [Parameter(Mandatory)][string]$WorkDirectory,
+    [Parameter(Mandatory)][int]$AppProcessId
+)
+
+Set-StrictMode -Version Latest
+$ErrorActionPreference = 'Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+using System.Threading;
+namespace SessionBoardLayoutTest {
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int left, top, right, bottom; }
+    [StructLayout(LayoutKind.Sequential)] public struct Monitor { public uint size; public Rect monitor, work; public uint flags; }
+    public static class Native {
+        [DllImport("user32.dll")] public static extern bool SetProcessDpiAwarenessContext(IntPtr value);
+        [DllImport("user32.dll")] public static extern IntPtr SetThreadDpiAwarenessContext(IntPtr value);
+        [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect value);
+        [DllImport("user32.dll")] public static extern bool SetWindowPos(IntPtr window, IntPtr after, int x, int y, int width, int height, uint flags);
+        [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr window);
+        [DllImport("user32.dll")] public static extern IntPtr MonitorFromWindow(IntPtr window, uint flags);
+        [DllImport("user32.dll")] public static extern bool GetMonitorInfoW(IntPtr monitor, ref Monitor value);
+        [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr word, IntPtr data);
+        [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
+        [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(uint thread);
+        [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr window);
+        [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr window, IntPtr dc);
+        [DllImport("gdi32.dll")] public static extern uint GetPixel(IntPtr dc, int x, int y);
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder value, int size, out uint needed);
+    }
+    public sealed class HeaderWatch : IDisposable {
+        private volatile bool running = true;
+        private readonly Thread thread;
+        public string Failure { get; private set; }
+        public int Samples { get; private set; }
+        public HeaderWatch(IntPtr window, int caption, int expectedY, int sampleX) {
+            Rect initial;
+            Native.GetWindowRect(window, out initial);
+            var dc = Native.GetDC(window);
+            var accent = Native.GetPixel(dc, sampleX, initial.bottom - initial.top - caption / 2);
+            Native.ReleaseDC(window, dc);
+            thread = new Thread(() => {
+                Native.SetThreadDpiAwarenessContext(new IntPtr(-4));
+                while (running) {
+                    Rect before, after;
+                    Native.GetWindowRect(window, out before);
+                    var surface = Native.GetDC(window);
+                    var top = Native.GetPixel(surface, sampleX, caption / 2);
+                    Native.ReleaseDC(window, surface);
+                    Native.GetWindowRect(window, out after);
+                    Samples++;
+                    if (before.top == after.top && before.bottom == after.bottom && before.top != expectedY && top == accent && accent != 0xffffffff) {
+                        Failure = "The rendered header appeared at " + before.top + " instead of " + expectedY;
+                        break;
+                    }
+                    Thread.Yield();
+                }
+            });
+            thread.IsBackground = true;
+            thread.Start();
+        }
+        public void Dispose() { running = false; thread.Join(); }
+    }
+}
+'@
+$desktop_name = [Text.StringBuilder]::new(256)
+$needed = [uint32]0
+$desktop = [SessionBoardLayoutTest.Native]::GetThreadDesktop([SessionBoardLayoutTest.Native]::GetCurrentThreadId())
+if (-not [SessionBoardLayoutTest.Native]::GetUserObjectInformationW($desktop, 2, $desktop_name, 512, [ref]$needed) -or -not $desktop_name.ToString().StartsWith('luil-uia-')) {
+    throw 'Widget layout checks require the luil-uia isolated desktop.'
+}
+$null = [SessionBoardLayoutTest.Native]::SetProcessDpiAwarenessContext([IntPtr]::new(-4))
+$null = [SessionBoardLayoutTest.Native]::SetThreadDpiAwarenessContext([IntPtr]::new(-4))
+$Executable = [IO.Path]::GetFullPath($Executable)
+$work_directory = $WorkDirectory
+$data_directory = Join-Path $work_directory 'sessions'
+$null = New-Item -ItemType Directory -Path $data_directory -Force
+$script:checks = 0
+
+function Assert-Layout([bool]$condition, [string]$message) {
+    $script:checks++
+    if (-not $condition) { throw $message }
+}
+
+function Send-Update([string]$summary, [string]$session_id = 'layout-test', [string]$event_name = 'turn_started') {
+    @{
+        schema_version = 1; provider = 'codex'; session_id = $session_id; event = $event_name
+        timestamp_ms = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); summary = $summary; cwd = $work_directory
+    } | ConvertTo-Json -Compress | & $Executable --hook --normalized --strict --data-dir $data_directory | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Test hook failed.' }
+}
+
+function Get-Box {
+    $box = [SessionBoardLayoutTest.Rect]::new()
+    $null = [SessionBoardLayoutTest.Native]::GetWindowRect($script:window_handle, [ref]$box)
+    return $box
+}
+
+function Get-NativeHit([int]$x, [int]$y) {
+    return [SessionBoardLayoutTest.Native]::SendMessageW($script:window_handle, 0x84, [IntPtr]::Zero, [IntPtr]::new(($y -shl 16) -bor ($x -band 65535))).ToInt64()
+}
+
+function Assert-CaptionHit([int]$header_y) {
+    $title = (Wait-LuilElement -id 'widget-title').Current.BoundingRectangle
+    Assert-Layout ((Get-NativeHit ([int]($title.Right - 8)) ([int]($header_y + $title.Height / 2))) -eq 2) 'luil did not expose HTCAPTION at the drawn header.'
+    foreach ($id in 'widget-detail', 'widget-theme', 'widget-backdrop', 'widget-pin', 'widget-collapse', 'compact-close') {
+        $button = (Wait-LuilElement -id $id).Current.BoundingRectangle
+        Assert-Layout ((Get-NativeHit ([int]($button.X + $button.Width / 2)) ([int]($button.Y + $button.Height / 2))) -eq 1) "The caption button $id became a drag or native window-button target."
+    }
+}
+
+function Move-Widget([int]$x, [int]$y, [int]$width, [int]$height) {
+    $null = [SessionBoardLayoutTest.Native]::SetWindowPos($script:window_handle, [IntPtr]::Zero, $x, $y, $width, $height, 0x14)
+}
+
+function Wait-Header([double]$y) {
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $header = (Wait-LuilElement -id 'widget-title').Current.BoundingRectangle
+        if ([Math]::Abs($header.Y - $y) -le 1) { return $header }
+        Start-Sleep -Milliseconds 30
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw "Header moved: expected $y, actual $($header.Y)"
+}
+
+function Get-UpdateSurface {
+    $element = Wait-LuilElement -id 'update-count' -all_surfaces
+    $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
+    while ($null -ne $element) {
+        $handle = $element.Current.NativeWindowHandle
+        if ($handle -ne 0 -and $handle -ne $script:window_handle) { return $element }
+        $element = $walker.GetParent($element)
+    }
+    throw 'The notification has no native popup surface.'
+}
+
+function Toggle-StableHeader([double]$y, [bool]$collapsed) {
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $deadline = [DateTime]::UtcNow.AddSeconds(5)
+    do {
+        $header = (Wait-LuilElement -id 'widget-title').Current.BoundingRectangle
+        Assert-Layout ([Math]::Abs($header.Y - $y) -le 1) "Header jumped during collapse transition: expected $y, actual $($header.Y)"
+        $signal = Find-LuilElement -id 'widget-signal'
+        $box = Get-Box
+        if ($collapsed -and $null -eq $signal -and $box.bottom - $box.top -eq $caption) { return }
+        if (-not $collapsed -and $null -ne $signal -and $box.bottom - $box.top -gt $caption) { return }
+    } while ([DateTime]::UtcNow -lt $deadline)
+    throw 'Collapse transition did not complete.'
+}
+
+
+try {
+    Send-Update '첫 번째 작업'
+    $ui_root = Connect-LuilApp -process_id $AppProcessId
+    $script:window_handle = [IntPtr]$ui_root.Current.NativeWindowHandle
+    $monitor = [SessionBoardLayoutTest.Monitor]::new()
+    $monitor.size = [Runtime.InteropServices.Marshal]::SizeOf($monitor)
+    $null = [SessionBoardLayoutTest.Native]::GetMonitorInfoW([SessionBoardLayoutTest.Native]::MonitorFromWindow($window_handle, 2), [ref]$monitor)
+    $work = $monitor.work
+    $scale = [SessionBoardLayoutTest.Native]::GetDpiForWindow($window_handle) / 96.0
+    $caption = [int](40 * $scale)
+    $width = [int](400 * $scale)
+    $height = [int](560 * $scale)
+    $x = $work.left + 50
+    $top_y = $work.top + 50
+    Move-Widget $x $top_y $width $height
+    $null = Wait-Header $top_y
+    Assert-CaptionHit $top_y
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -id 'widget-signal' -absent
+    $null = Wait-Header $top_y
+    Assert-Layout (((Get-Box).bottom - (Get-Box).top) -eq $caption) 'Collapsed widget did not keep only the header.'
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -id 'widget-signal'
+    $null = Wait-Header $top_y
+
+    $bottom_y = $work.bottom - $caption - 50
+    Move-Widget $x $bottom_y $width $height
+    $null = Wait-Header $bottom_y
+    $box = Get-Box
+    Assert-Layout ($box.top -lt $bottom_y -and $box.bottom -eq $bottom_y + $caption) 'Bottom overflow did not place the list above the fixed header.'
+    Assert-CaptionHit $bottom_y
+    Assert-Layout ((Get-NativeHit ($box.left + 100) ($box.top + 24)) -eq 1) 'The old top caption position still exposes a drag or window-button target.'
+    Save-LuilShot -path (Join-Path $work_directory 'header-bottom.png')
+    $header_watch = [SessionBoardLayoutTest.HeaderWatch]::new($window_handle, $caption, $bottom_y, [int](8 * $scale))
+    try {
+        foreach ($iteration in 1..40) {
+            Toggle-StableHeader $bottom_y $true
+            Toggle-StableHeader $bottom_y $false
+        }
+    }
+    finally {
+        $header_watch.Dispose()
+    }
+    Assert-Layout ([string]::IsNullOrEmpty($header_watch.Failure)) $header_watch.Failure
+    Assert-Layout ($header_watch.Samples -gt 0) 'No transition pixels were observed.'
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -id 'widget-signal' -absent
+    $null = Wait-Header $bottom_y
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -id 'widget-signal'
+    $null = Wait-Header $bottom_y
+
+    Move-Widget $x ($top_y + $caption - $height) $width $height
+    $null = Wait-Header $top_y
+    Assert-Layout ((Get-Box).top -eq $top_y) 'Top overflow did not place the list below the fixed header.'
+    Save-LuilShot -path (Join-Path $work_directory 'header-top.png')
+    Move-Widget $x $top_y (($work.right - $work.left) * 3) (($work.bottom - $work.top) * 3)
+    $box = Get-Box
+    Assert-Layout ($box.left -ge $work.left -and $box.top -ge $work.top -and $box.right -le $work.right -and $box.bottom -le $work.bottom) 'Oversized widget escaped the monitor work area.'
+    Move-Widget $x $top_y $width $height
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -id 'widget-signal' -absent
+    Send-Update '동작 중 알림 금지' 'running-notice'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 2'
+    Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'A newly running session generated a popup.'
+    Send-Update '작업 완료 알림 금지' 'running-notice' 'turn_finished'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 1'
+    Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'A completed session generated a popup.'
+
+    Send-Update '승인 응답을 기다립니다' 'waiting-notice' 'approval_requested'
+    $null = Wait-LuilElement -name '승인 응답을 기다립니다' -all_surfaces
+    $popup = Get-UpdateSurface
+    $popup_box = $popup.Current.BoundingRectangle
+    Assert-Layout ($popup_box.Top -ge (Get-Box).bottom -and $popup_box.Bottom -le $work.bottom) 'Response notification was not below the top header or escaped the work area.'
+    Save-LuilShot -path (Join-Path $work_directory 'notification-below.png') -surface $popup
+    $waiting_button = Wait-LuilElement -search 'update-.*-confirm' -name '응답 대기' -all_surfaces
+    Assert-Layout (-not $waiting_button.Current.IsEnabled) 'An outstanding response notification can be dismissed.'
+    Send-Update '알림을 만들지 않는 진행 메시지' 'ordinary-notice'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 1 · 진행 2'
+    $null = Wait-LuilElement -id 'update-count' -name '확인 필요 1개' -all_surfaces
+    Assert-Layout ($null -eq (Find-LuilElement -name '알림을 만들지 않는 진행 메시지' -all_surfaces)) 'Ordinary progress appeared alongside the response request.'
+
+    Move-Widget $x $bottom_y $width $caption
+    $null = Wait-Header $bottom_y
+    $popup = Get-UpdateSurface
+    $popup_box = $popup.Current.BoundingRectangle
+    Assert-Layout ($popup_box.Bottom -le (Get-Box).top -and $popup_box.Top -ge $work.top) 'Response notification was not above the bottom header or escaped the work area.'
+    Save-LuilShot -path (Join-Path $work_directory 'notification-above.png') -surface $popup
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -id 'widget-signal'
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces -absent
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -name '응답 대기' -all_surfaces
+    Assert-Layout $true 'Outstanding response did not return after reopening and collapsing.'
+    Save-LuilShot -path (Join-Path $work_directory 'persistent-response.png') -surface (Get-UpdateSurface)
+    $persistent_until = [DateTime]::UtcNow.AddSeconds(9)
+    while ([DateTime]::UtcNow -lt $persistent_until) {
+        $response = Wait-LuilElement -name '응답 대기' -all_surfaces
+        Assert-Layout (-not $response.Current.IsEnabled) 'An outstanding request expired or became dismissible.'
+        Start-Sleep -Milliseconds 100
+    }
+    Send-Update '승인 후 작업 중 메시지' 'waiting-notice'
+    $null = Wait-LuilElement -name '응답 처리됨' -all_surfaces
+    Assert-Layout ($null -eq (Find-LuilElement -name '작업 중' -all_surfaces)) 'Resolved response was shown as a running notification.'
+    Assert-Layout ($null -eq (Find-LuilElement -name '승인 후 작업 중 메시지' -all_surfaces)) 'Running progress replaced the resolved request.'
+    $resolved_at = [DateTime]::UtcNow
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces -absent -timeout_seconds 12
+    Assert-Layout (([DateTime]::UtcNow - $resolved_at).TotalSeconds -ge 7) 'Externally resolved response notification vanished too soon.'
+
+    foreach ($index in 1..5) {
+        Send-Update "입력이 필요한 항목 $index" "multiple-$index" 'input_requested'
+    }
+    $null = Wait-LuilElement -id 'update-count' -name '확인 필요 5개' -all_surfaces
+    $null = Set-LuilScroll (Wait-LuilElement -id 'update-scroll' -type 'ScrollBar' -all_surfaces) -end
+    $popup = Get-UpdateSurface
+    $popup_box = $popup.Current.BoundingRectangle
+    Assert-Layout ($popup_box.Top -ge $work.top -and $popup_box.Bottom -le $work.bottom) 'Multiple response requests escaped the work area.'
+    Save-LuilShot -path (Join-Path $work_directory 'multiple-notifications.png') -surface $popup
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces -absent
+    Send-Update '사용자 입력을 기다립니다' 'input-notice' 'input_requested'
+    $null = Wait-LuilElement -name '사용자 입력을 기다립니다'
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
+    $null = Wait-LuilElement -name '사용자 입력을 기다립니다' -all_surfaces
+    Assert-Layout (-not (Wait-LuilElement -name '응답 대기' -all_surfaces).Current.IsEnabled) 'Input request was not retained as a persistent notification.'
+    @{
+        checks = $checks; desktop = $desktop_name.ToString(); scale = $scale; isolated = $true; transition_samples = $header_watch.Samples
+        header_top = $true; header_bottom = $true; header_anchor = $true; caption_hit = $true; work_area_limit = $true
+        notification_above = $true; notification_below = $true; only_response_requests = $true; notification_scroll = $true
+        persistent_response = $true; external_response_expiry = $true; collapse_cycles = 40
+    } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work_directory 'verification.json') -Encoding utf8NoBOM
+    Write-Output "$checks widget layout and notification checks passed (isolated desktop: $desktop_name). Artifacts: $work_directory"
+}
+catch {
+    $failure = $_
+    Write-Output $failure.ScriptStackTrace
+    try { Get-LuilTree -limit 80 } catch { Write-Output $_.Exception.Message }
+    throw ($failure.Exception.Message + "`n" + $failure.ScriptStackTrace)
+}

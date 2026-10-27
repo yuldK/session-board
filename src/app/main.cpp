@@ -29,13 +29,15 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         bool claude_hooks { true };
         luil::win32::window_config config {};
         config.class_name = L"SessionBoard.Main";
-        config.caption = session_board::board_caption();
+        config.caption = session_board::widget_caption();
         config.icon_resource = IDI_SESSION_BOARD;
         // 주 창은 위젯이다. 상세 화면은 위젯에서 여는 독립 창이다.
         config.initial_width = session_board::widget_width;
         config.initial_height = session_board::widget_height;
         config.minimum_client_width = 320;
         config.minimum_client_height = 180;
+        config.resize_border_thickness = 6;
+        config.resize_corner_thickness = 14;
         if (const auto arguments { luil::win32::command_line_arguments() }; arguments.has_value())
             for (std::size_t index { 1 }; index < arguments->size(); ++index)
             {
@@ -125,7 +127,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
             appearance,
             std::move(appearance_file),
         };
-        session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance, std::move(appearance) };
+        const bool header_bottom { config.initial_placement.has_value() && session_board::load_widget_header_bottom(placement_file) };
+        session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance, std::move(appearance), header_bottom };
         session_board::board_policy policy {};
         luil::win32::window_environment environment {};
         environment.driver = &driver;
