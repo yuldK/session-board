@@ -191,6 +191,93 @@ namespace session_board {
             require(updates.pending().empty(), "A new running session generated a notification.");
         }
 
+        void completed_updates()
+        {
+            const auto now { std::chrono::steady_clock::now() };
+            const auto finish = [](session_snapshot& session, const session_status status = session_status::idle) {
+                session.status = status;
+                session.turn_closed = true;
+            };
+            const auto work = [](session_snapshot& session, const std::string& turn) {
+                session.status = session_status::running;
+                session.turn_closed = false;
+                session.turn_id = turn;
+            };
+            session_updates updates {};
+            session_snapshot session { .provider = "claude", .session_id = "done-test", .turn_id = "turn-1", .title = "보고서 작성해 줘", .summary = "보고서를 작성했습니다." };
+            finish(session);
+            updates.observe({ session }, true, now);
+            require(updates.pending().empty(), "An already finished session was announced on first sight.");
+            work(session, "turn-1");
+            updates.observe({ session }, true, now);
+            require(updates.pending().empty(), "Running work was announced.");
+            finish(session);
+            updates.observe({ session }, true, now);
+            require(updates.pending().size() == 1 && updates.pending().front().completed && !updates.pending().front().response_required, "Finished work was not announced.");
+            updates.expire(now + std::chrono::hours { 1 });
+            require(updates.pending().size() == 1, "A finished-work notification expired by itself.");
+            session.summary = "요약이 바뀌었습니다.";
+            updates.observe({ session }, true, now);
+            require(updates.pending().front().session.summary == "요약이 바뀌었습니다.", "Finished-work notification kept a stale summary.");
+
+            // 같은 turn이 잠깐 흔들려 다시 끝나도 한 번만 알린다.
+            updates.acknowledge("claude", "done-test", updates.pending().front().sequence);
+            require(updates.pending().empty(), "Closing a finished-work notification failed.");
+            work(session, "turn-1");
+            updates.observe({ session }, true, now);
+            finish(session);
+            updates.observe({ session }, true, now);
+            require(updates.pending().empty(), "The same turn was announced twice.");
+
+            // 다시 일하기 시작하면 지난 완료 알림을 거둔다.
+            work(session, "turn-2");
+            updates.observe({ session }, true, now);
+            finish(session);
+            updates.observe({ session }, true, now);
+            require(updates.pending().size() == 1, "The next turn's completion was not announced.");
+            work(session, "turn-3");
+            updates.observe({ session }, true, now);
+            require(updates.pending().empty(), "A completion stayed after the session resumed.");
+
+            // 응답을 처리한 뒤 끝나면 처리됨 알림이 끝난 알림 하나로 바뀌고 저절로 사라지지 않는다.
+            session.status = session_status::waiting_input;
+            updates.observe({ session }, true, now);
+            work(session, "turn-3");
+            updates.observe({ session }, true, now);
+            require(updates.pending().size() == 1 && updates.pending().front().expires_at.has_value(), "Handled response did not start expiry.");
+            finish(session);
+            updates.observe({ session }, true, now);
+            require(updates.pending().size() == 1 && updates.pending().front().completed && !updates.pending().front().expires_at.has_value(), "Handled response did not become a completion.");
+            updates.expire(now + std::chrono::hours { 1 });
+            require(updates.pending().size() == 1, "Completion inherited the handled-response expiry.");
+
+            // 오류로 멈춘 것은 알리고, 사용자가 중단했거나 세션이 닫힌 것은 알리지 않는다.
+            session_updates others {};
+            session_snapshot failed { .provider = "codex", .session_id = "fail-test", .status = session_status::running };
+            session_snapshot stopped { .provider = "codex", .session_id = "stop-test", .status = session_status::running };
+            session_snapshot closed { .provider = "antigravity", .session_id = "close-test", .status = session_status::running };
+            others.observe({ failed, stopped, closed }, true, now);
+            finish(failed, session_status::failed);
+            finish(stopped, session_status::interrupted);
+            finish(closed, session_status::ended);
+            others.observe({ failed, stopped, closed }, true, now);
+            require(others.pending().size() == 1 && others.pending().front().session.session_id == "fail-test" && others.pending().front().completed, "Failure or user stop announced wrongly.");
+            // 응답이 필요한 알림이 끝난 알림보다 위다.
+            session_snapshot asking { .provider = "claude", .session_id = "ask-test", .status = session_status::waiting_approval };
+            others.observe({ failed, stopped, closed, asking }, true, now);
+            require(others.pending().size() == 2 && others.pending().front().response_required, "Response request was not ordered first.");
+
+            // 펼친 동안 작업 중이던 세션이 접은 뒤 끝나도 알린다. 펼치면 알림은 읽은 것이다.
+            session_updates later {};
+            session_snapshot visible { .provider = "codex", .session_id = "later-test", .status = session_status::running };
+            later.observe({ visible }, false, now);
+            finish(visible);
+            later.observe({ visible }, true, now);
+            require(later.pending().size() == 1 && later.pending().front().completed, "Completion right after collapsing was missed.");
+            later.observe({ visible }, false, now);
+            require(later.pending().empty(), "Opening the list did not mark completions as read.");
+        }
+
         void persistent_responses()
         {
             const auto now { std::chrono::steady_clock::now() };
@@ -614,6 +701,7 @@ int main()
         session_board::failures_and_long_tools();
         session_board::widget_anchoring();
         session_board::hidden_updates();
+        session_board::completed_updates();
         session_board::persistent_responses();
         session_board::notices();
         session_board::validation();

@@ -175,9 +175,16 @@ try {
     Send-Update '동작 중 알림 금지' 'running-notice'
     $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 2'
     Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'A newly running session generated a popup.'
-    Send-Update '작업 완료 알림 금지' 'running-notice' 'turn_finished'
+    # 작업 중이던 세션이 끝나면 무엇이 끝났는지 놓치지 않게 닫을 때까지 남는 알림을 띄운다.
+    Send-Update '작업 완료 알림' 'running-notice' 'turn_finished'
     $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 1'
-    Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'A completed session generated a popup.'
+    $null = Wait-LuilElement -id 'update-count' -name '작업 끝남 1개' -all_surfaces
+    $null = Wait-LuilElement -name '작업 완료 알림' -all_surfaces
+    $done_button = Wait-LuilElement -search 'update-.*-confirm' -name '닫기' -all_surfaces
+    Assert-Layout $done_button.Current.IsEnabled 'A finished-work notification cannot be dismissed.'
+    Save-LuilShot -path (Join-Path $work_directory 'finished-notification.png') -surface (Get-UpdateSurface)
+    Invoke-LuilElement $done_button
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces -absent
 
     Send-Update '승인 응답을 기다립니다' 'waiting-notice' 'approval_requested'
     $null = Wait-LuilElement -name '승인 응답을 기다립니다' -all_surfaces
@@ -186,6 +193,9 @@ try {
     Assert-Layout ($popup_box.Top -ge (Get-Box).bottom -and $popup_box.Bottom -le $work.bottom) 'Response notification was not below the top header or escaped the work area.'
     Save-LuilShot -path (Join-Path $work_directory 'notification-below.png') -surface $popup
     $waiting_button = Wait-LuilElement -search 'update-.*-confirm' -name '응답 대기' -all_surfaces
+    # 목록을 접은 채로도 알린 세션의 창으로 갈 수 있다. 창 정보가 없는 세션이면 단추가 이유를 말하며 꺼진다.
+    $focus_button = Wait-LuilElement -search 'update-.*-focus' -all_surfaces
+    Assert-Layout ($focus_button.Current.Name -match '세션 창으로 이동|창 정보가 없습니다') 'Notification card has no session focus button.'
     Assert-Layout (-not $waiting_button.Current.IsEnabled) 'An outstanding response notification can be dismissed.'
     Send-Update '알림을 만들지 않는 진행 메시지' 'ordinary-notice'
     $null = Wait-LuilElement -id 'widget-count' -name '확인 1 · 진행 2'
@@ -238,7 +248,7 @@ try {
     @{
         checks = $checks; desktop = $desktop_name.ToString(); scale = $scale; isolated = $true
         header_top = $true; header_bottom = $true; header_anchor = $true; caption_hit = $true; work_area_limit = $true
-        notification_above = $true; notification_below = $true; only_response_requests = $true; notification_scroll = $true
+        notification_above = $true; notification_below = $true; finished_work = $true; notification_scroll = $true
         persistent_response = $true; external_response_expiry = $true; collapse_cycles = 40
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work_directory 'verification.json') -Encoding utf8NoBOM
     Write-Output "$checks widget layout and notification checks passed (isolated desktop: $desktop_name). Artifacts: $work_directory"

@@ -2313,22 +2313,40 @@ namespace session_board {
             const luil::stack_config heading_config { .direction = luil::stack_direction::row, .spacing = 8.0f };
             auto heading { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-heading" }, heading_config) };
             heading->add_flexible(provider_line(id + u8"-project", session.provider, provider_text(session) + u8" · " + project_text(session), 11.0f));
+            // 목록을 접어 둔 채로도 알린 세션으로 바로 갈 수 있어야 한다. 갈 수 있는지는 지금 목록의 세션으로 판단한다(창 정보는 Hook이 나중에 채운다).
+            const auto current { std::ranges::find_if(data_.sessions, [&](const auto& item) { return session_key(item) == session_key(session); }) };
+            const auto& target { current != data_.sessions.end() ? *current : session };
+            const std::u8string focus_name { focus_tooltip(target, provider_text(session) + u8" 세션 창으로 이동") };
+            auto focus { widget_button(id + u8"-focus", focus_name, luil::codicons::icon_link_external, luil::make_message_action(focus_session_intent { session_key(session) })) };
+            focus->set_enabled(can_focus(target));
+            heading->add(std::move(focus), { .length = widget_icon_button, .cross_length = widget_icon_button });
             const luil::text_button_config confirm_config { .text = update.response_required ? u8"응답 대기" : u8"닫기" };
             auto confirm { std::make_unique<luil::text_button_element>(luil::ui_element_id { kind_button, id + u8"-confirm" }, confirm_config) };
             confirm->set_action(luil::ui_trigger::left_click, luil::make_message_action(acknowledgement));
-            confirm->set_tooltip(update.response_required ? u8"세션에서 승인하거나 응답하면 잠시 뒤 자동으로 숨깁니다" : u8"응답이 처리된 알림을 숨깁니다");
+            confirm->set_tooltip(update.response_required ? u8"세션에서 승인하거나 응답하면 잠시 뒤 자동으로 숨깁니다"
+                    : update.completed                    ? u8"끝난 작업 알림을 숨깁니다"
+                                                          : u8"응답이 처리된 알림을 숨깁니다");
             confirm->set_enabled(!update.response_required);
             confirm->set_cursor(luil::ui_cursor::hand);
             heading->add(std::move(confirm), update.response_required ? 72.0f : 44.0f);
             body->add(std::move(heading), 24.0f);
-            body->add(label(id + u8"-text", task_text(session), 12.0f), 18.0f);
-            if (update.response_required)
+            // 끝난 작업은 무엇을 요청했는지가 먼저다. 요청 발췌문이 있으면 그것을, 결과 문장은 아랫줄에 둔다.
+            //  - 오류로 멈췄으면 결과 문장보다 원인이 중요하다.
+            const bool request { update.completed && !session.title.empty() };
+            const std::u8string text { request ? u8"요청 · " + u8(session.title) : task_text(session) };
+            body->add(label(id + u8"-text", text, 12.0f), 18.0f);
+            if (update.response_required || update.completed)
                 body->add(status_cell(id + u8"-status", session, now), 18.0f);
             else
                 body->add(label(id + u8"-status", u8"응답 처리됨", 11.0f, luil::label_color_role::dim), 18.0f);
-            body->add(label(id + u8"-activity", update.response_required ? activity_text(session, now) : u8"잠시 후 알림을 숨깁니다", 11.0f, luil::label_color_role::dim), 16.0f);
+            std::u8string activity { u8"잠시 후 알림을 숨깁니다" };
+            if (update.response_required)
+                activity = activity_text(session, now);
+            else if (update.completed)
+                activity = request && !session.summary.empty() && session.status != session_status::failed ? u8"결과 · " + u8(session.summary) : activity_text(session, now);
+            body->add(label(id + u8"-activity", activity, 11.0f, luil::label_color_role::dim), 16.0f);
             auto card { panel(id, std::move(body)) };
-            card->set_access_name(provider_text(session) + u8" · " + task_text(session));
+            card->set_access_name(provider_text(session) + u8" · " + text);
             rows->add(std::move(card), row_height);
         }
         const float content_height { row_height * static_cast<float>(updates_.pending().size()) };
@@ -2336,15 +2354,18 @@ namespace session_board {
         auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"update-content" }, luil::stack_config {}) };
         auto heading { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"update-heading" }, luil::stack_config { .padding = { 10.0f, 0.0f, 10.0f, 0.0f } }) };
         const auto waiting { std::ranges::count_if(updates_.pending(), [](const auto& update) { return update.response_required; }) };
-        const auto resolved { updates_.pending().size() - static_cast<std::size_t>(waiting) };
-        std::u8string heading_text { u8"응답 처리됨 " + u8(std::to_string(resolved)) + u8"개" };
-        if (waiting > 0)
-        {
-            heading_text = u8"확인 필요 " + u8(std::to_string(waiting)) + u8"개";
-            if (resolved > 0)
-                heading_text += u8" · 처리됨 " + u8(std::to_string(resolved)) + u8"개";
-        }
-        heading->add_flexible(label(u8"update-count", heading_text, 11.0f, luil::label_color_role::dim));
+        const auto completed { std::ranges::count_if(updates_.pending(), [](const auto& update) { return update.completed; }) };
+        const auto resolved { updates_.pending().size() - static_cast<std::size_t>(waiting + completed) };
+        std::u8string heading_text {};
+        for (const auto& [count, name] :
+            { std::pair { static_cast<std::size_t>(waiting), u8"확인 필요 " }, std::pair { static_cast<std::size_t>(completed), u8"작업 끝남 " }, std::pair { resolved, u8"응답 처리됨 " } })
+            if (count > 0)
+                heading_text += (heading_text.empty() ? std::u8string {} : std::u8string { u8" · " }) + name + u8(std::to_string(count)) + u8"개";
+        // 접힌 위젯은 바닥 줄이 없다. 세션 창으로 가지 못한 이유는 알림 머리에서 말한다.
+        if (!notice_.empty())
+            heading->add_flexible(label(u8"update-notice", notice_, 11.0f, luil::label_color_role::error));
+        else
+            heading->add_flexible(label(u8"update-count", heading_text, 11.0f, luil::label_color_role::dim));
         content->add(std::move(heading), heading_height);
         if (content_height > height - heading_height)
         {
