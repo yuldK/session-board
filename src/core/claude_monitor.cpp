@@ -1,5 +1,7 @@
 #include "core/claude_monitor.h"
 
+#include "core/local_record.h"
+
 #include <shlobj.h>
 #include <windows.h>
 
@@ -17,7 +19,6 @@
 namespace session_board {
     namespace {
         constexpr std::size_t maximum_line { 512 * 1024 };
-        constexpr std::uint64_t read_budget { 8 * 1024 * 1024 };
         constexpr std::uintmax_t maximum_runtime_file { 64 * 1024 };
 
         std::string text_field(const nlohmann::json& value, const char* key, const std::size_t limit = 360)
@@ -58,30 +59,7 @@ namespace session_board {
 
         std::int64_t record_time(const nlohmann::json& record)
         {
-            const std::string text { text_field(record, "timestamp", 64) };
-            if (text.size() < 19)
-                return 0;
-            SYSTEMTIME time {};
-            try
-            {
-                time.wYear = static_cast<WORD>(std::stoi(text.substr(0, 4)));
-                time.wMonth = static_cast<WORD>(std::stoi(text.substr(5, 2)));
-                time.wDay = static_cast<WORD>(std::stoi(text.substr(8, 2)));
-                time.wHour = static_cast<WORD>(std::stoi(text.substr(11, 2)));
-                time.wMinute = static_cast<WORD>(std::stoi(text.substr(14, 2)));
-                time.wSecond = static_cast<WORD>(std::stoi(text.substr(17, 2)));
-                if (text.size() >= 23 && text[19] == '.')
-                    time.wMilliseconds = static_cast<WORD>(std::stoi(text.substr(20, 3)));
-            }
-            catch (...)
-            {
-                return 0;
-            }
-            FILETIME file {};
-            if (!SystemTimeToFileTime(&time, &file))
-                return 0;
-            const ULARGE_INTEGER ticks { file.dwLowDateTime, file.dwHighDateTime };
-            return static_cast<std::int64_t>(ticks.QuadPart / 10'000) - 11'644'473'600'000;
+            return iso_time_ms(text_field(record, "timestamp", 64));
         }
 
         std::string tool_activity(const std::string& name)
@@ -133,11 +111,6 @@ namespace session_board {
             return std::nullopt;
         }
 
-        std::int64_t file_time_ms(const std::filesystem::file_time_type time)
-        {
-            return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::clock_cast<std::chrono::system_clock>(time).time_since_epoch()).count();
-        }
-
         bool waiting_for_input(const std::string& waiting_for)
         {
             // 2.1.308의 등록 정보는 승인 대화상자 밖의 대기를 이 값들로 남긴다.
@@ -163,90 +136,16 @@ namespace session_board {
 
         struct tracked_file
         {
-            struct native_file
-            {
-                HANDLE value { INVALID_HANDLE_VALUE };
-                ~native_file()
-                {
-                    if (value != INVALID_HANDLE_VALUE)
-                        CloseHandle(value);
-                }
-            };
-
             claude_transcript reader {};
-            std::uint64_t position { 0 };
-            std::array<DWORD, 3> identity {};
-            bool has_identity { false };
-            std::string partial {};
-            bool dropping { false };
+            jsonl_tail tail { maximum_line };
             bool ready { false };
             std::optional<session_snapshot> published {};
 
+            // 파일이 잘리거나 교체되면 처음부터 다시 읽는다. 다 읽을 때까지 이전 결과(`published`)를 유지한다.
             void read(const std::filesystem::path& path)
             {
-                const native_file input { CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
-                BY_HANDLE_FILE_INFORMATION info {};
-                if (input.value == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(input.value, &info))
-                    return;
-                const std::uint64_t size { (static_cast<std::uint64_t>(info.nFileSizeHigh) << 32) | info.nFileSizeLow };
-                const std::array<DWORD, 3> current_identity { info.dwVolumeSerialNumber, info.nFileIndexHigh, info.nFileIndexLow };
-                // 파일이 잘리거나 교체되면 처음부터 다시 읽는다. 다 읽을 때까지 이전 결과를 유지한다.
-                if (size < position || (has_identity && identity != current_identity))
-                {
-                    auto previous { std::move(published) };
-                    const bool sidechain { reader.sidechain() };
-                    *this = tracked_file {};
-                    reader = claude_transcript { sidechain };
-                    published = std::move(previous);
-                }
-                identity = current_identity;
-                has_identity = true;
-                LARGE_INTEGER offset {};
-                offset.QuadPart = static_cast<LONGLONG>(position);
-                if (!SetFilePointerEx(input.value, offset, nullptr, FILE_BEGIN))
-                    return;
-                std::array<char, 32 * 1024> buffer {};
-                const auto until { std::min(size, position + read_budget) };
-                while (position < until)
-                {
-                    DWORD count { 0 };
-                    if (!ReadFile(input.value, buffer.data(), static_cast<DWORD>(std::min<std::uint64_t>(buffer.size(), until - position)), &count, nullptr) || count == 0)
-                        break;
-                    position += count;
-                    for (DWORD index { 0 }; index < count; ++index)
-                    {
-                        const char character { buffer[static_cast<std::size_t>(index)] };
-                        if (character == '\n')
-                        {
-                            if (!dropping && !partial.empty())
-                            {
-                                const auto value { nlohmann::json::parse(partial, nullptr, false) };
-                                if (!value.is_discarded())
-                                    try
-                                    {
-                                        reader.consume(value);
-                                    }
-                                    catch (...)
-                                    {}
-                            }
-                            partial.clear();
-                            dropping = false;
-                        }
-                        else if (!dropping)
-                        {
-                            if (partial.size() < maximum_line)
-                                partial += character;
-                            else
-                            {
-                                // 요청 원문을 담은 큰 기록은 상태 해석에 쓰지 않으므로 줄 끝까지 버린다.
-                                partial.clear();
-                                partial.shrink_to_fit();
-                                dropping = true;
-                            }
-                        }
-                    }
-                }
-                ready = position >= size;
+                tail.read(path, [this] { reader = claude_transcript { reader.sidechain() }; }, [this](const nlohmann::json& value) { reader.consume(value); });
+                ready = tail.ready();
             }
         };
 
@@ -437,11 +336,13 @@ namespace session_board {
         else
             return std::nullopt;
 
-        nlohmann::json normalized { { "schema_version", 1 }, { "provider", "claude" }, { "session_id", text_field(input, "session_id", 513) }, { "event", event }, { "timestamp_ms", now_ms() },
-            { "turn_id", text_field(input, "prompt_id", 512) }, { "cwd", text_field(input, "cwd", 4096) }, { "model", text_field(input, "model", 128) },
-            { "tool_id", text_field(input, "tool_use_id", 512) }, { "tool_name", tool }, { "source", text_field(input, "source", 32) } };
+        nlohmann::json normalized { { "schema_version", 1 }, { "provider", "claude" }, { "session_id", text_field(input, "session_id", 513) }, { "event", event }, { "timestamp_ms", now_ms() } };
+        normalized.update({ { "turn_id", text_field(input, "prompt_id", 512) }, { "cwd", text_field(input, "cwd", 4096) }, { "model", text_field(input, "model", 128) } });
+        normalized.update({ { "tool_id", text_field(input, "tool_use_id", 512) }, { "tool_name", tool }, { "source", text_field(input, "source", 32) } });
         if (hook == "UserPromptSubmit")
             normalized["title"] = text_field(input, "prompt", 180);
+        else if (hook == "StopFailure")
+            normalized["failure"] = text_field(input, "error", 64);
         else if (hook == "Stop")
         {
             const auto found { input.find("last_assistant_message") };
@@ -585,9 +486,11 @@ namespace session_board {
         if (!sidechain_ && (type == "queue-operation" || type == "attachment"))
         {
             const auto attachment { record.find("attachment") };
-            const std::string text { type == "queue-operation"              ? raw_text(record, "content")
-                    : attachment != record.end() && attachment->is_object() ? raw_text(*attachment, "prompt")
-                                                                            : std::string {} };
+            std::string text {};
+            if (type == "queue-operation")
+                text = raw_text(record, "content");
+            else if (attachment != record.end() && attachment->is_object())
+                text = raw_text(*attachment, "prompt");
             if (task_notification(text, time))
                 ++snapshot_.revision;
             return;
@@ -667,6 +570,7 @@ namespace session_board {
                 snapshot_.turn_id = text_field(record, "promptId", 512);
                 snapshot_.turn_closed = false;
                 snapshot_.status = session_status::running;
+                snapshot_.failure.clear();
                 snapshot_.summary.clear();
                 snapshot_.tool_name.clear();
                 snapshot_.active_tools.clear();
@@ -682,6 +586,28 @@ namespace session_board {
             const auto model { text_field(message, "model", 128) };
             if (!model.empty() && !model.starts_with("<"))
                 snapshot_.model = model;
+            // API 오류는 assistant 기록으로 남지만 응답이 아니다. 작업 설명을 오류 문구로 덮지 않고 turn을 오류로 닫는다.
+            //  - 이 기록의 stop_reason은 end_turn이 아니라서 따로 닫지 않으면 작업 중에 멈춰 남는다.
+            if (flag(record, "isApiErrorMessage"))
+            {
+                std::string detail {};
+                if (content.is_array())
+                    for (const auto& part : content)
+                        if (part.is_object() && text_field(part, "type", 32) == "text" && detail.empty())
+                            detail = brief_text(raw_text(part, "text"));
+                const auto failure { text_field(record, "error", 64) };
+                snapshot_.status = session_status::failed;
+                snapshot_.failure = std::ranges::all_of(failure, [](const char character) { return (character >= 'a' && character <= 'z') || character == '_'; }) ? failure : std::string {};
+                snapshot_.turn_closed = true;
+                snapshot_.active_tools.clear();
+                snapshot_.tool_name.clear();
+                snapshot_.activity = failure_label(snapshot_.failure) + (detail.empty() ? std::string {} : " · " + detail);
+                snapshot_.last_event = "failed";
+                if (time > 0)
+                    snapshot_.updated_ms = std::max(snapshot_.updated_ms, time);
+                ++snapshot_.revision;
+                return;
+            }
             if (content.is_array())
                 for (const auto& part : content)
                 {
@@ -852,8 +778,8 @@ namespace session_board {
         FILETIME kernel {};
         FILETIME user {};
         DWORD code { 0 };
-        const bool alive { GetProcessTimes(process, &created, &exited, &kernel, &user) && GetExitCodeProcess(process, &code) && code == STILL_ACTIVE
-            && ULARGE_INTEGER { created.dwLowDateTime, created.dwHighDateTime }.QuadPart == runtime.process_start };
+        const bool running { GetProcessTimes(process, &created, &exited, &kernel, &user) && GetExitCodeProcess(process, &code) && code == STILL_ACTIVE };
+        const bool alive { running && ULARGE_INTEGER { created.dwLowDateTime, created.dwHighDateTime }.QuadPart == runtime.process_start };
         CloseHandle(process);
         return alive;
     }
@@ -939,6 +865,7 @@ namespace session_board {
                         local.turn_closed = found->turn_closed;
                         local.tool_name = found->tool_name;
                         local.active_tools = found->active_tools;
+                        local.failure = found->failure;
                         local.updated_ms = found->updated_ms;
                     }
                 }
@@ -970,6 +897,9 @@ namespace session_board {
         std::map<std::filesystem::path, tracked_file> files {};
         std::map<std::filesystem::path, agent_folder> agent_folders {};
         std::set<std::string> known_live {};
+        // 이번 실행에서 열린 것을 본 세션과, 그 뒤 닫힌 것을 처음 본 시각이다.
+        std::set<std::string> seen_live {};
+        std::map<std::string, std::int64_t> closed_at {};
         auto next_discovery { std::chrono::steady_clock::time_point {} };
         while (!stop.stop_requested())
         {
@@ -1008,12 +938,21 @@ namespace session_board {
                             continue;
                         }
                         auto session { *file.published };
+                        const auto time { now_ms() };
                         if (const auto own { live.find(session.session_id) }; own != live.end())
                         {
                             apply_claude_runtime(session, own->second);
                             covered.insert(session.session_id);
+                            seen_live.insert(session.session_id);
+                            closed_at.erase(session.session_id);
                         }
-                        const auto time { now_ms() };
+                        // 열린 것을 본 세션의 등록이 사라졌으면 프로세스가 끝났다. 등록을 남기지 않는 판에서는 열린 것을 본 적이 없어 건드리지 않는다.
+                        else if (seen_live.contains(session.session_id))
+                        {
+                            const auto closed { closed_at.try_emplace(session.session_id, time).first->second };
+                            if (time - closed >= vanished_grace_ms)
+                                close_vanished_session(session, closed);
+                        }
                         auto& folder { agent_folders[path] };
                         read_agents(path.parent_path() / path.stem() / L"subagents", folder);
                         std::vector<session_child> agents {};
@@ -1021,8 +960,8 @@ namespace session_board {
                         {
                             if (!agent.meta.has_value())
                                 continue;
-                            const auto child { make_claude_agent_child(
-                                id, *agent.meta, agent.transcript.ready ? &agent.transcript.reader : nullptr, file_time_ms(agent.meta_time), file.reader.task_outcomes()) };
+                            const auto* reader { agent.transcript.ready ? &agent.transcript.reader : nullptr };
+                            const auto child { make_claude_agent_child(id, *agent.meta, reader, file_time_ms(agent.meta_time), file.reader.task_outcomes()) };
                             agents.push_back(child);
                         }
                         merge_children(session.children, agents);

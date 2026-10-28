@@ -25,6 +25,8 @@ target_link_options(session_board_options INTERFACE $<$<CONFIG:Release>:/OPT:REF
 
 add_library(session_board_core STATIC src/core/session.cpp src/core/session.h src/core/store.cpp src/core/store.h src/core/codex_monitor.cpp src/core/codex_monitor.h
     src/core/claude_monitor.cpp src/core/claude_monitor.h
+    src/core/antigravity_monitor.cpp src/core/antigravity_monitor.h
+    src/core/local_record.cpp src/core/local_record.h src/core/providers.h
     src/core/claude_desktop.cpp src/core/claude_desktop.h
     src/core/claude_hooks.cpp src/core/claude_hooks.h
     src/core/codex_hooks.cpp src/core/codex_hooks.h src/core/hook_installation.h
@@ -64,6 +66,9 @@ if(SESSION_BOARD_BUILD_TESTS)
     add_executable(session_board_claude_tests tests/claude_tests.cpp)
     target_link_libraries(session_board_claude_tests PRIVATE session_board_core)
     add_test(NAME session_board_claude COMMAND session_board_claude_tests)
+    add_executable(session_board_antigravity_tests tests/antigravity_tests.cpp)
+    target_link_libraries(session_board_antigravity_tests PRIVATE session_board_core)
+    add_test(NAME session_board_antigravity COMMAND session_board_antigravity_tests)
     add_executable(session_board_hook_install_tests tests/codex_hooks_tests.cpp)
     target_link_libraries(session_board_hook_install_tests PRIVATE session_board_core)
     add_test(NAME session_board_hook_installation COMMAND session_board_hook_install_tests)

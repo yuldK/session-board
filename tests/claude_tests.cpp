@@ -101,6 +101,8 @@ namespace session_board {
             const auto stopped { claude_event(hook("Stop", { { "last_assistant_message", "\n구현을 마쳤습니다.\n자세한 내용은 아래와 같습니다." } })) };
             require(stopped->event == "turn_finished" && stopped->summary == "구현을 마쳤습니다.", "Stop summary not reduced to first line.");
             require(claude_event(hook("StopFailure"))->event == "failed", "API stop failure not visible.");
+            const auto limited { claude_event(hook("StopFailure", { { "error", "rate_limit" }, { "last_assistant_message", "API Error: Rate limit reached" } })) };
+            require(limited->failure == "rate_limit" && limited->summary.empty(), "Stop failure reason lost or error text used as summary.");
             require(claude_event(hook("SessionEnd", { { "reason", "other" } }))->event == "session_ended", "SessionEnd not converted.");
 
             session_snapshot snapshot {};
@@ -153,6 +155,18 @@ namespace session_board {
             reader.consume(assistant({ { { "type", "tool_use" }, { "id", "toolu_3" }, { "name", "Bash" } } }));
             reader.consume(line("user", { { "message", { { "role", "user" }, { "content", { { { "type", "text" }, { "text", "[Request interrupted by user for tool use]" } } } } } } }));
             require(view.status == session_status::interrupted && view.active_tools.empty(), "Interruption not shown.");
+            // 사용 한도 같은 API 오류는 assistant 기록이지만 응답이 아니다. 작업 설명을 덮지 않고 turn을 오류로 닫는다.
+            reader.consume(prompt("prompt-3", "또 다음"));
+            reader.consume(assistant({ { { "type", "text" }, { "text", "계속 확인하겠습니다." } } }));
+            reader.consume(assistant({ { { "type", "tool_use" }, { "id", "toolu_4" }, { "name", "Read" } } }));
+            auto limited { assistant({ { { "type", "text" }, { "text", "You've hit your weekly limit · resets Sep 28" } } }, "stop_sequence") };
+            limited["isApiErrorMessage"] = true;
+            limited["error"] = "rate_limit";
+            reader.consume(limited);
+            require(view.status == session_status::failed && view.turn_closed && view.active_tools.empty() && view.failure == "rate_limit", "API error left the turn working.");
+            require(view.summary == "계속 확인하겠습니다." && view.activity.starts_with("사용 한도 도달 · You've hit"), "API error text replaced summary or reason missing.");
+            reader.consume(prompt("prompt-4", "재시도"));
+            require(view.status == session_status::running && view.failure.empty(), "Failure survived a new turn.");
         }
 
         nlohmann::json notification(const std::string& id, const std::string& status)

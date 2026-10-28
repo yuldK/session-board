@@ -6,8 +6,11 @@
 
 #include "include/core/SkBlendMode.h"
 #include "include/core/SkCanvas.h"
+#include "include/core/SkFont.h"
 #include "include/core/SkPaint.h"
 #include "include/core/SkPath.h"
+#include "include/core/SkRRect.h"
+#include "include/core/SkRect.h"
 #include "include/effects/SkGradient.h"
 #include "include/utils/SkParsePath.h"
 
@@ -157,16 +160,45 @@ namespace session_board {
                                            "6a4.4992 4.4992 0 0 1 6.6802 4.66zM8.3065 12.863l-2.02-1.1638a.0804.0804 0 0 1-.038-.0567V6.0742a4.4992 4.4992 0 0 1 7.3757-3.4537l-.142.0805L8.704 5."
                                            "459a.7948.7948 0 0 0-.3927.6813zm1.0976-2.3654l2.602-1.4998 2.6069 1.4998v2.9994l-2.5974 1.4997-2.6067-1.4997Z";
 
-        // Claude·Codex 표식이다. 상표라 아이콘 글꼴(codicons)에 없으므로 SVG 경로를 그린다.
+        // Simple Icons(CC0)의 Google Gemini 표식 경로다 (24×24 viewBox). Antigravity는 따로 표식이 없어 Gemini 표식을 쓴다.
+        constexpr char gemini_mark_path[] = "M11.04 19.32Q12 21.51 12 24q0-2.49.93-4.68.96-2.19 2.58-3.81t3.81-2.55Q21.51 12 24 12q-2.49 0-4.68-.93a12.3 12.3 0 0 1-3.81-2.58 12.3 12.3 0 0 1-2.58-3."
+                                            "81Q12 2.49 12 0q0 2.49-.96 4.68-.93 2.19-2.55 3.81a12.3 12.3 0 0 1-3.81 2.58Q2.49 12 0 12q2.49 0 4.68.96 2.19.93 3.81 2.55t2.55 3.81";
+
+        // provider 표식의 경로다. 처음 그릴 때 한 번만 푼다.
+        const SkPath& provider_path(const std::string_view provider)
+        {
+            static const SkPath claude { SkParsePath::FromSVGString(claude_mark_path).value_or(SkPath {}) };
+            static const SkPath codex { SkParsePath::FromSVGString(codex_mark_path).value_or(SkPath {}) };
+            static const SkPath gemini { SkParsePath::FromSVGString(gemini_mark_path).value_or(SkPath {}) };
+            return provider == "codex" ? codex : provider == "antigravity" ? gemini : claude;
+        }
+
+        // 상자 가운데에 정사각형으로 provider 표식을 그린다.
+        //  - Claude·Gemini는 고유색이 있어 테마와 관계없이 그 색이고, Codex는 단색 표식이라 `mono`를 따른다.
+        void draw_provider_mark(luil::draw_context& context, const std::string_view provider, const luil::rect_f& box, const luil::ui_color mono)
+        {
+            const float side { std::min(box.width, box.height) };
+            if (side <= 0.0f)
+                return;
+            const luil::ui_color color { provider == "codex" ? mono : provider == "antigravity" ? luil::make_ui_color(0x8e, 0x75, 0xb2) : luil::make_ui_color(0xd9, 0x77, 0x57) };
+            SkPaint paint { luil::solid_paint(color) };
+            paint.setAntiAlias(true);
+            context.canvas.save();
+            context.canvas.translate(box.x + (box.width - side) / 2.0f, box.y + (box.height - side) / 2.0f);
+            context.canvas.scale(side / 24.0f, side / 24.0f);
+            context.canvas.drawPath(provider_path(provider), paint);
+            context.canvas.restore();
+        }
+
+        // provider 표식이다. 상표라 아이콘 글꼴(codicons)에 없으므로 SVG 경로를 그린다.
         //  - Simple Icons에 Codex 표식이 없어 OpenAI 표식을 쓴다.
         //  - 바로 뒤의 글이 provider 이름을 말하므로 보조 기술에는 드러내지 않는다 (이름을 두 번 읽지 않게).
-        //  - 경로는 처음 그릴 때 한 번만 푼다.
         class provider_mark final : public luil::ui_element
         {
         public:
             provider_mark(const std::u8string& id, const std::string_view provider)
                 : ui_element { luil::ui_element_id { kind_label, id } }
-                , codex_ { provider == "codex" }
+                , provider_ { provider }
             {
                 set_hit_opaque(false);
             }
@@ -178,18 +210,7 @@ namespace session_board {
 
             void draw(luil::draw_context& context, const luil::interaction_snapshot&) const override
             {
-                const luil::rect_f box { bounds() };
-                const float side { std::min(box.width, box.height) };
-                if (side <= 0.0f)
-                    return;
-                // Claude는 고유색이 있어 테마와 관계없이 그 색이고, Codex는 단색 표식이라 글자색을 따른다.
-                SkPaint paint { luil::solid_paint(codex_ ? context.palette.primary_foreground : luil::make_ui_color(0xd9, 0x77, 0x57)) };
-                paint.setAntiAlias(true);
-                context.canvas.save();
-                context.canvas.translate(box.x + (box.width - side) / 2.0f, box.y + (box.height - side) / 2.0f);
-                context.canvas.scale(side / 24.0f, side / 24.0f);
-                context.canvas.drawPath(codex_ ? codex_path() : claude_path(), paint);
-                context.canvas.restore();
+                draw_provider_mark(context, provider_, bounds(), context.palette.primary_foreground);
             }
 
             [[nodiscard]] luil::access_info accessibility() const override
@@ -198,35 +219,184 @@ namespace session_board {
             }
 
         private:
-            [[nodiscard]] static const SkPath& claude_path()
+            std::string provider_ {};
+        };
+
+        // provider 필터의 칸 하나다. 전체 칸은 글을, provider 칸은 표식과 세션 수를 그린다.
+        //  - 모양은 luil 선택 묶음의 칸을 따른다: 고른 칸만 밝은 판이 뜨고 글이 진해진다.
+        //  - 표식만으로는 이름을 말하지 못하므로 툴팁과 보조 기술 이름에 provider 이름을 둔다.
+        struct filter_chip
+        {
+            std::u8string value {};
+            std::string provider {};
+            std::u8string text {};
+            std::u8string name {};
+        };
+
+        constexpr float filter_mark_size { 14.0f };
+        constexpr float filter_mark_gap { 5.0f };
+        constexpr float filter_chip_padding { 10.0f };
+
+        class filter_chip_element final : public luil::ui_element
+        {
+        public:
+            filter_chip_element(filter_chip chip, const bool selected)
+                : ui_element { luil::ui_element_id { luil::ui_element_kind::choice, chip.value } }
+                , chip_ { std::move(chip) }
+                , selected_ { selected }
             {
-                static const SkPath path { SkParsePath::FromSVGString(claude_mark_path).value_or(SkPath {}) };
-                return path;
+                set_search_label(chip_.name);
+                set_tooltip(chip_.name);
+                set_cursor(luil::ui_cursor::hand);
+                set_action(luil::ui_trigger::left_click, luil::make_message_action(provider_intent { chip_.provider }));
             }
 
-            [[nodiscard]] static const SkPath& codex_path()
+            // 칸의 맞춤 폭이다 (논리 픽셀).
+            [[nodiscard]] float fitted_width(const luil::measure_context& context) const
             {
-                static const SkPath path { SkParsePath::FromSVGString(codex_mark_path).value_or(SkPath {}) };
-                return path;
+                const float text { std::ceil(context.text_width(chip_.text, context.style_metrics().body_font_size)) };
+                return filter_chip_padding * 2.0f + text + (chip_.provider.empty() ? 0.0f : filter_mark_size + filter_mark_gap);
             }
 
-            bool codex_ { false };
+            void arrange(const luil::arrange_context& context) override
+            {
+                set_bounds(context.slot);
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot& interaction) const override
+            {
+                const float scale { context.scale > 0.0f ? context.scale : 1.0f };
+                const luil::rect_f box { bounds() };
+                if (box.width <= 0.0f || box.height <= 0.0f)
+                    return;
+                const float radius { context.metrics.row_corner_radius * scale };
+                const SkRect shape { SkRect::MakeXYWH(box.x, box.y, box.width, box.height) };
+                if (selected_)
+                {
+                    SkPaint thumb { luil::solid_paint(context.palette.thumb_background) };
+                    thumb.setAntiAlias(true);
+                    context.canvas.drawRRect(SkRRect::MakeRectXY(shape, radius, radius), thumb);
+                    // 라이트의 흰 판이 밝은 트랙에서 번지지 않게 1px 선을 몸 안쪽에 긋는다.
+                    SkPaint edge { luil::solid_paint(context.palette.divider) };
+                    edge.setStyle(SkPaint::kStroke_Style);
+                    edge.setStrokeWidth(scale);
+                    edge.setAntiAlias(true);
+                    const SkRect inner { shape.makeInset(scale / 2.0f, scale / 2.0f) };
+                    context.canvas.drawRRect(SkRRect::MakeRectXY(inner, radius - scale / 2.0f, radius - scale / 2.0f), edge);
+                }
+                else
+                    luil::draw_hover_fill(context, box, id(), interaction, true, context.metrics.row_corner_radius);
+
+                const luil::ui_color text_color { selected_ ? context.palette.selection_foreground : context.palette.secondary_foreground };
+                SkFont font { sk_ref_sp(context.ui_typeface), luil::scaled_font_size(context.metrics.body_font_size, scale) };
+                font.setEmbolden(selected_);
+                const float mark { chip_.provider.empty() ? 0.0f : (filter_mark_size + filter_mark_gap) * scale };
+                const float text_width { luil::measure_text(chip_.text, font) };
+                float x { box.x + std::max(0.0f, (box.width - mark - text_width) / 2.0f) };
+                if (!chip_.provider.empty())
+                {
+                    const float side { filter_mark_size * scale };
+                    // 고르지 않은 칸의 단색 표식은 글과 같이 흐리게 둔다.
+                    draw_provider_mark(context, chip_.provider, { x, box.y + (box.height - side) / 2.0f, side, side }, text_color);
+                    x += mark;
+                }
+                const SkPaint foreground { luil::solid_paint(text_color) };
+                static_cast<void>(luil::draw_text_within(context.canvas, chip_.text, x, box.y + luil::centered_text_baseline(font, box.height), box.x + box.width - x, font, foreground));
+            }
+
+            [[nodiscard]] luil::access_info accessibility() const override
+            {
+                return { .role = luil::access_role::radio_button, .name = chip_.name, .selected = selected_ };
+            }
+
+        private:
+            filter_chip chip_ {};
+            bool selected_ { false };
+        };
+
+        // provider 필터다. 칸은 맞춤 폭으로 왼쪽부터 늘어서고, 트랙은 칸들만큼만 그린다.
+        class provider_filter_element final : public luil::ui_element
+        {
+        public:
+            provider_filter_element(std::vector<filter_chip> chips, const std::u8string& selected)
+                : ui_element { luil::ui_element_id { luil::ui_element_kind::choice_group, u8"provider-filter" } }
+            {
+                set_focus_group(luil::focus_axis::horizontal);
+                set_focus_entry(luil::ui_element_id { luil::ui_element_kind::choice, selected });
+                for (auto& chip : chips)
+                {
+                    const bool chosen { chip.value == selected };
+                    add_child(std::make_unique<filter_chip_element>(std::move(chip), chosen));
+                }
+            }
+
+            void arrange(const luil::arrange_context& context) override
+            {
+                const float scale { context.scale > 0.0f ? context.scale : 1.0f };
+                const float padding { luil::choice_track_padding * scale };
+                const float gap { luil::choice_segment_gap * scale };
+                const float height { luil::choice_toggle_height * scale };
+                float x { context.slot.x + padding };
+                for (const auto& child : children())
+                {
+                    const float width { static_cast<const filter_chip_element&>(*child).fitted_width(context.measure()) * scale };
+                    child->arrange(context.for_child({ x, context.slot.y + padding, width, std::max(0.0f, height - padding * 2.0f) }));
+                    x += width + gap;
+                }
+                const float track { children().empty() ? 0.0f : x - gap + padding - context.slot.x };
+                set_bounds({ context.slot.x, context.slot.y, std::min(track, context.slot.width), height });
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot& interaction) const override
+            {
+                const float scale { context.scale > 0.0f ? context.scale : 1.0f };
+                const luil::rect_f box { bounds() };
+                const float radius { (context.metrics.row_corner_radius + luil::choice_track_padding) * scale };
+                SkPaint track { luil::solid_paint(context.palette.input_background) };
+                track.setAntiAlias(true);
+                context.canvas.drawRRect(SkRRect::MakeRectXY(SkRect::MakeXYWH(box.x, box.y, box.width, box.height), radius, radius), track);
+                draw_children(context, interaction);
+            }
+
+            [[nodiscard]] luil::access_info accessibility() const override
+            {
+                return { .role = luil::access_role::radio_group, .name = u8"AI 종류" };
+            }
         };
 
         // 표식으로 시작하는 한 줄이다. provider 이름은 표식 뒤에도 글로 남겨 읽기·검색·툴팁이 그대로다.
         //  - `fit`이면 글 길이만큼만 차지한다 (상태 표시줄처럼 맞춤으로 쌓는 자리).
-        std::unique_ptr<luil::stack_element> provider_line(
-            const std::u8string& id, const std::string_view provider, std::u8string text, const float size, const luil::label_color_role color = luil::label_color_role::dim, const bool fit = false)
+        //  - `tooltip`이 있으면 줄인 글 대신 그 글을 툴팁으로 보인다.
+        std::unique_ptr<luil::stack_element> provider_line(const std::u8string& id, const std::string_view provider, std::u8string text, const float size,
+            const luil::label_color_role color = luil::label_color_role::dim, const bool fit = false, std::u8string tooltip = {})
         {
             const luil::stack_config config { .direction = luil::stack_direction::row, .spacing = 4.0f, .cross_alignment = luil::stack_alignment::center };
             auto line { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-line" }, config) };
             const float mark { size + 1.0f };
             line->add(std::make_unique<provider_mark>(id + u8"-mark", provider), { .length = mark, .cross_length = mark });
+            auto body { label(id, std::move(text), size, color) };
+            if (!tooltip.empty())
+                body->set_tooltip(std::move(tooltip));
             if (fit)
-                line->add_fit(label(id, std::move(text), size, color));
+                line->add_fit(std::move(body));
             else
-                line->add_flexible(label(id, std::move(text), size, color));
+                line->add_flexible(std::move(body));
             return line;
+        }
+
+        // 위젯 바닥 줄은 provider 셋이 폭을 나눠 쓴다. 표식이 provider를 말하므로 이름과 `자동 수집`을 뗀다.
+        std::u8string short_signal(const std::string_view provider, std::u8string text)
+        {
+            if (const auto* info { find_provider(provider) }; info != nullptr)
+            {
+                const std::u8string prefix { std::u8string { info->display } + u8" · " };
+                if (text.starts_with(prefix))
+                    text.erase(0, prefix.size());
+            }
+            constexpr std::u8string_view collected { u8"자동 수집 " };
+            if (text.starts_with(collected))
+                text.erase(0, collected.size());
+            return text;
         }
 
         // 앱 UI 명령의 인자로 싣는 수다. 같은 프로세스 안에서만 오가므로 짧은 십진 표기면 된다.
@@ -402,6 +572,12 @@ namespace session_board {
             case session_status::idle:
                 return session.turn_closed ? u8"응답 완료" : u8"대기 중";
             case session_status::running:
+                // 오래 도는 도구는 확인할 일이 아니라 얼마나 돌았는지가 궁금한 일이다. 마지막 소식이 그 도구의 시작이다.
+                if (long_running_tool(session, now))
+                {
+                    const auto minutes { std::max<std::int64_t>(0, (now - session.updated_ms) / 60'000) };
+                    return u8"작업 중 · " + (minutes < 60 ? u8(std::to_string(minutes)) + u8"분째" : u8(std::to_string(minutes / 60)) + u8"시간째");
+                }
                 return u8"작업 중";
             case session_status::waiting_approval:
                 return u8"승인 대기";
@@ -471,13 +647,17 @@ namespace session_board {
 
         std::u8string source_text(const session_snapshot& session)
         {
-            return std::u8string { session.observation_source == "claude-local" ? u8"Claude 로컬 기록" : u8"Codex 로컬 기록" } + (session.runtime_loaded ? u8" · 열린 세션" : u8" · 최근 활동");
+            const auto found { std::ranges::find(providers, session.observation_source, &provider_info::local_source) };
+            const std::u8string source { found != std::end(providers) ? found->local_text : std::u8string_view { u8"로컬 기록" } };
+            return source + (session.runtime_loaded ? u8" · 열린 세션" : u8" · 최근 활동");
         }
 
         std::u8string own_activity_text(const session_snapshot& session, const std::int64_t now)
         {
             if (!session.activity.empty())
                 return u8(session.activity);
+            if (session.status == session_status::failed && !session.failure.empty())
+                return u8"오류 · " + u8(failure_label(session.failure));
             if (needs_attention(session, now))
                 return u8"마지막 상태 · " + u8(std::string { status_name(session.status) }) + (session.tool_name.empty() ? u8"" : u8" · " + u8(session.tool_name));
             if (!session.tool_name.empty())
@@ -605,7 +785,8 @@ namespace session_board {
 
         std::u8string provider_text(const session_snapshot& session)
         {
-            return session.provider == "codex" ? u8"Codex" : u8"Claude";
+            const auto* provider { find_provider(session.provider) };
+            return provider != nullptr ? std::u8string { provider->display } : u8(session.provider);
         }
 
         // 상세 화면 목록의 묶음이다. 내 차례인 세션이 맨 위에 선다.
@@ -1248,10 +1429,11 @@ namespace session_board {
 
     board_driver::board_driver(std::filesystem::path directory, const bool open_detail, std::filesystem::path codex_directory, std::filesystem::path claude_directory,
         std::optional<claude_hook_result> claude_hooks, std::optional<codex_hook_result> codex_hooks, std::filesystem::path detail_placement_file, widget_appearance appearance,
-        std::filesystem::path appearance_file)
+        std::filesystem::path appearance_file, std::filesystem::path antigravity_directory)
         : directory_ { std::move(directory) }
         , codex_directory_ { std::move(codex_directory) }
         , claude_directory_ { std::move(claude_directory) }
+        , antigravity_directory_ { std::move(antigravity_directory) }
         , claude_hooks_ { std::move(claude_hooks) }
         , codex_hooks_ { std::move(codex_hooks) }
         , theme_ { appearance.theme }
@@ -1287,6 +1469,8 @@ namespace session_board {
             claude_ = std::make_unique<claude_monitor>(claude_directory_);
             desktop_ = std::make_unique<claude_desktop_index>(default_claude_desktop_roots());
         }
+        if (!antigravity_directory_.empty())
+            antigravity_ = std::make_unique<antigravity_monitor>(antigravity_directory_);
         try
         {
             std::filesystem::create_directories(directory_);
@@ -1320,6 +1504,11 @@ namespace session_board {
         {
             claude_data_ = claude_->snapshot();
             merge_claude_sessions(data_.sessions, claude_data_.sessions);
+        }
+        if (antigravity_ != nullptr)
+        {
+            antigravity_data_ = antigravity_->snapshot();
+            merge_antigravity_sessions(data_.sessions, antigravity_data_.sessions);
         }
         if (desktop_ != nullptr)
         {
@@ -1486,7 +1675,7 @@ namespace session_board {
 
     void board_driver::tick(const std::chrono::steady_clock::time_point now)
     {
-        if (changes_ == INVALID_HANDLE_VALUE || codex_ != nullptr || claude_ != nullptr)
+        if (changes_ == INVALID_HANDLE_VALUE || codex_ != nullptr || claude_ != nullptr || antigravity_ != nullptr)
             reload();
         else if (WaitForSingleObject(changes_, 0) == WAIT_OBJECT_0)
         {
@@ -1581,13 +1770,15 @@ namespace session_board {
             return root;
         }
 
-        std::array<std::size_t, 3> provider_counts {};
+        // 맨 앞은 전체, 그 뒤는 provider 표의 순서다.
+        std::array<std::size_t, std::size(providers) + 1> provider_counts {};
         std::size_t attention { 0 };
         std::size_t running { 0 };
         for (const auto& session : data_.sessions)
         {
             ++provider_counts[0];
-            ++provider_counts[session.provider == "codex" ? 1 : 2];
+            if (const auto* provider { find_provider(session.provider) }; provider != nullptr)
+                ++provider_counts[static_cast<std::size_t>(provider - providers) + 1];
             const auto group { group_of(session, now) };
             attention += group == session_group::attention ? 1 : 0;
             running += group == session_group::running ? 1 : 0;
@@ -1599,16 +1790,18 @@ namespace session_board {
         };
         auto toolbar { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"toolbar" }, toolbar_config) };
         // 값은 `filter-` 뒤에 provider를 붙인 것이다. UIA 검증이 이 이름으로 필터를 찾는다.
-        luil::choice_group_config filter { .owner = u8"provider-filter", .style = luil::choice_style::toggle, .name = u8"AI 종류" };
-        filter.items.push_back({ u8"filter-all", u8"전체 " + u8(std::to_string(provider_counts[0])) });
-        filter.items.push_back({ u8"filter-codex", u8"Codex " + u8(std::to_string(provider_counts[1])) });
-        filter.items.push_back({ u8"filter-claude", u8"Claude " + u8(std::to_string(provider_counts[2])) });
-        filter.selected = provider_.empty() ? u8"filter-all" : u8"filter-" + u8(provider_);
-        filter.select = [](const std::u8string& value) {
-            const std::u8string_view name { std::u8string_view { value }.substr(7) };
-            return luil::make_app_action(provider_intent { name == u8"all" ? std::string {} : std::string { name.begin(), name.end() } });
-        };
-        toolbar->add(std::make_unique<luil::choice_group_element>(std::move(filter)), { .length = filter_width, .cross_length = luil::choice_toggle_height });
+        //  - provider가 셋 이상이라 이름 대신 표식과 세션 수를 보인다. 이름은 툴팁과 보조 기술이 말한다.
+        std::vector<filter_chip> chips {};
+        const auto all_text { u8"전체 " + u8(std::to_string(provider_counts[0])) };
+        chips.push_back({ .value = u8"filter-all", .text = all_text, .name = all_text });
+        for (std::size_t index { 0 }; index < std::size(providers); ++index)
+        {
+            const auto count { u8(std::to_string(provider_counts[index + 1])) };
+            chips.push_back(
+                { .value = u8"filter-" + u8(providers[index].id), .provider = std::string { providers[index].id }, .text = count, .name = std::u8string { providers[index].display } + u8" " + count });
+        }
+        toolbar->add(std::make_unique<provider_filter_element>(std::move(chips), provider_.empty() ? u8"filter-all" : u8"filter-" + u8(provider_)),
+            { .length = filter_width, .cross_length = luil::choice_toggle_height });
         toolbar->add_fit(std::make_unique<luil::check_element>(
             luil::check_config { .owner = u8"filter-working", .label = u8"작업 중만", .checked = working_only_, .toggle = luil::make_message_action(working_intent {}) }));
         toolbar->add_flexible_gap();
@@ -1729,11 +1922,8 @@ namespace session_board {
         }
         else
         {
-            const auto signal { signal_text(now) };
-            const auto split { signal.find(u8'\n') };
-            status->add_fit(provider_line(u8"signal-codex", "codex", signal.substr(0, split), 11.0f, luil::label_color_role::dim, true));
-            if (split != std::u8string::npos)
-                status->add_fit(provider_line(u8"signal-claude", "claude", signal.substr(split + 1), 11.0f, luil::label_color_role::dim, true));
+            for (const auto& [provider, text] : signal_lines(now))
+                status->add_fit(provider_line(u8"signal-" + u8(provider), provider, text, 11.0f, luil::label_color_role::dim, true));
         }
         std::u8string location { directory_.u8string() + u8" · 세션 " + u8(std::to_string(data_.sessions.size())) + u8"개" };
         if (data_.truncated)
@@ -2059,11 +2249,14 @@ namespace session_board {
             }
             else
             {
-                const auto signal { signal_text(now) };
-                const auto split { signal.find(u8'\n') };
-                footer->add_flexible(provider_line(u8"widget-signal", "codex", signal.substr(0, split), 11.0f));
-                if (split != std::u8string::npos)
-                    footer->add_flexible(provider_line(u8"widget-signal-claude", "claude", signal.substr(split + 1), 11.0f));
+                // 첫 줄의 이름은 provider를 붙이지 않는다. UIA 검증이 이 이름으로 바닥 줄을 찾는다.
+                bool first { true };
+                for (const auto& [provider, text] : signal_lines(now))
+                {
+                    const std::u8string id { first ? std::u8string { u8"widget-signal" } : u8"widget-signal-" + u8(provider) };
+                    footer->add_flexible(provider_line(id, provider, short_signal(provider, text), 11.0f, luil::label_color_role::dim, false, text));
+                    first = false;
+                }
             }
             luil::panel_config footer_surface {};
             footer_surface.background = [](const luil::ui_color_palette& palette) { return palette.surface_background; };
@@ -2187,7 +2380,7 @@ namespace session_board {
         frame.popups.push_back(std::move(popup));
     }
 
-    std::u8string board_driver::signal_text(const std::int64_t now) const
+    std::vector<std::pair<std::string, std::u8string>> board_driver::signal_lines(const std::int64_t now) const
     {
         const auto received = [&](const std::string_view provider) {
             const auto found { std::ranges::find_if(data_.sessions, [&](const auto& session) { return session.provider == provider; }) };
@@ -2214,7 +2407,16 @@ namespace session_board {
                 : claude_hooks_->disabled           ? std::u8string { u8" · Hooks 꺼짐" }
                 : claude_hooks_->changed            ? std::u8string { u8" · Hooks 등록됨" }
                                                     : std::u8string { u8" · Hooks 병행" };
-        return codex + u8"\n" + claude;
+        std::vector<std::pair<std::string, std::u8string>> result { { "codex", std::move(codex) }, { "claude", std::move(claude) } };
+        // Antigravity는 수집을 켰거나 받은 세션이 있을 때만 한 줄을 차지한다. 쓰지 않는 사용자의 바닥 줄을 좁히지 않는다.
+        if (antigravity_ != nullptr)
+            result.emplace_back("antigravity",
+                !antigravity_data_.error.empty() ? u8(antigravity_data_.error)
+                    : antigravity_data_.ready    ? u8"Antigravity · 자동 수집 " + u8(std::to_string(antigravity_data_.sessions.size())) + u8"개"
+                                                 : std::u8string { u8"Antigravity · 로컬 세션 탐색 중" });
+        else if (std::ranges::any_of(data_.sessions, [](const auto& session) { return session.provider == "antigravity"; }))
+            result.emplace_back("antigravity", u8"Antigravity · " + received("antigravity"));
+        return result;
     }
 
     luil::app_message board_driver::make_close_message()

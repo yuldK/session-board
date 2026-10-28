@@ -1,13 +1,19 @@
 #include "core/session.h"
 
+#include "core/providers.h"
+
 #include <nlohmann/json.hpp>
 
 #include <algorithm>
 #include <chrono>
 #include <stdexcept>
+#include <utility>
 
 namespace session_board {
     namespace {
+        // 이만큼 소식이 없는 작업 중 상태는 그대로 믿지 않는다.
+        constexpr std::int64_t stale_after_ms { 10 * 60 * 1000 };
+
         constexpr std::string_view events[] {
             "session_started",
             "turn_started",
@@ -67,7 +73,7 @@ namespace session_board {
 
         void validate_identity(const std::string& provider, const std::string& id)
         {
-            if ((provider != "codex" && provider != "claude") || id.empty() || id.size() > 512)
+            if (!valid_provider(provider) || id.empty() || id.size() > 512)
                 throw std::runtime_error { "Invalid session identity." };
         }
 
@@ -264,6 +270,11 @@ namespace session_board {
             throw std::runtime_error { "Unsupported child event." };
         if (!result.outcome.empty() && result.outcome != "completed" && result.outcome != "failed" && result.outcome != "stopped")
             throw std::runtime_error { "Invalid child outcome." };
+        // 원인은 화면의 말을 고르는 열쇠다. 정해진 꼴이 아니면 버리고 이벤트는 받는다.
+        result.failure = field(input, "failure", 64);
+        if (result.event != "failed"
+            || !std::ranges::all_of(result.failure, [](const char character) { return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '_'; }))
+            result.failure.clear();
         return result;
     }
 
@@ -343,6 +354,8 @@ namespace session_board {
         if (new_turn || !event.summary.empty())
             snapshot.summary = event.summary;
 
+        if (event.event != "failed")
+            snapshot.failure.clear();
         if (new_turn)
         {
             snapshot.status = session_status::running;
@@ -389,6 +402,8 @@ namespace session_board {
             snapshot.turn_closed = true;
             snapshot.active_tools.clear();
             snapshot.tool_name.clear();
+            if (event.event == "failed")
+                snapshot.failure = event.failure;
             // 포그라운드 하위는 부모 turn 안에서 끝나야 한다. 남아 있으면 끝을 놓친 것이다.
             // 백그라운드 하위는 turn을 넘어 돌고, 세션이 닫힐 때만 함께 닫는다.
             close_children(snapshot, event.event == "interrupted" ? session_status::interrupted : session_status::ended, event.timestamp_ms, event.event != "session_ended");
@@ -425,6 +440,8 @@ namespace session_board {
             { "status", status_name(snapshot.status) }, { "updated_ms", snapshot.updated_ms }, { "revision", snapshot.revision }, { "turn_closed", snapshot.turn_closed },
             { "active_tools", snapshot.active_tools }, { "name", snapshot.name }, { "activity", snapshot.activity }, { "host_window", snapshot.host_window },
             { "host_process_id", snapshot.host_process_id } };
+        if (!snapshot.failure.empty())
+            result["failure"] = snapshot.failure;
         if (!snapshot.children.empty())
         {
             auto& children { result["children"] = nlohmann::json::array() };
@@ -460,6 +477,7 @@ namespace session_board {
         if (snapshot.active_tools.size() > 64)
             throw std::runtime_error { "Too many tools." };
         snapshot.status = parse_status(field(input, "status", 32));
+        snapshot.failure = field(input, "failure", 64);
         // 하위 목록이 없는 이전 스냅숏도 읽는다.
         if (const auto children { input.find("children") }; children != input.end() && children->is_array())
         {
@@ -479,7 +497,48 @@ namespace session_board {
     bool needs_attention(const session_snapshot& snapshot, const std::int64_t time_ms)
     {
         // 긴 명령과 비정상 종료는 hook만으로 구별할 수 없다. 완료로 추정하지 않는다.
-        return is_working(snapshot.status) && time_ms - snapshot.updated_ms >= 600'000;
+        //  - 로컬 관측이 세션이 살아 있고 도구 결과가 아직 없다고 말하면 긴 명령이다.
+        return is_working(snapshot.status) && time_ms - snapshot.updated_ms >= stale_after_ms && !long_running_tool(snapshot, time_ms);
+    }
+
+    bool long_running_tool(const session_snapshot& snapshot, const std::int64_t time_ms)
+    {
+        return snapshot.runtime_loaded && snapshot.status == session_status::running && !snapshot.active_tools.empty() && time_ms - snapshot.updated_ms >= stale_after_ms;
+    }
+
+    void close_vanished_session(session_snapshot& snapshot, const std::int64_t time_ms)
+    {
+        if (!is_working(snapshot.status))
+            return;
+        snapshot.status = session_status::ended;
+        snapshot.turn_closed = true;
+        snapshot.active_tools.clear();
+        snapshot.tool_name.clear();
+        snapshot.activity = "세션 닫힘 · 마지막 작업 보관 중";
+        snapshot.last_event = "session_ended";
+        snapshot.updated_ms = std::max(snapshot.updated_ms, time_ms);
+        close_children(snapshot, session_status::ended, time_ms, false);
+    }
+
+    std::string failure_label(const std::string_view failure)
+    {
+        constexpr std::pair<std::string_view, std::string_view> labels[] {
+            { "rate_limit", "사용 한도 도달" },
+            { "overloaded", "서버 과부하" },
+            { "authentication_failed", "인증 실패" },
+            { "oauth_org_not_allowed", "조직 접근 불가" },
+            { "account_on_hold", "계정 보류" },
+            { "billing_error", "결제 문제" },
+            { "invalid_request", "잘못된 요청" },
+            { "model_not_found", "모델 없음" },
+            { "server_error", "서버 오류" },
+            { "max_output_tokens", "출력 길이 초과" },
+            { "cloud_credential_error", "클라우드 자격 증명 오류" },
+        };
+        for (const auto& [key, text] : labels)
+            if (key == failure)
+                return std::string { text };
+        return "API 오류";
     }
 
     bool is_widget_visible(const session_snapshot& snapshot, const std::int64_t time_ms)

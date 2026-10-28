@@ -27,6 +27,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         bool custom_claude { false };
         bool claude_discovery { true };
         bool claude_hooks { true };
+        std::filesystem::path antigravity_directory { session_board::default_antigravity_directory() };
+        bool custom_antigravity { false };
+        bool antigravity_discovery { true };
         luil::win32::window_config config {};
         config.class_name = L"SessionBoard.Main";
         config.caption = session_board::widget_caption();
@@ -68,6 +71,13 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
                     claude_discovery = false;
                 else if (argument == u8"--no-claude-hooks")
                     claude_hooks = false;
+                else if (argument == u8"--antigravity-home" && index + 1 < arguments->size())
+                {
+                    antigravity_directory = std::filesystem::path { (*arguments)[++index] };
+                    custom_antigravity = true;
+                }
+                else if (argument == u8"--no-antigravity-discovery")
+                    antigravity_discovery = false;
                 else if (argument == u8"--detail")
                     open_detail = true;
                 // 예전 실행 인자다. 이제 위젯이 기본이라 하는 일이 없다.
@@ -119,6 +129,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
             }
         if (!claude_discovery || (custom_data && !custom_claude))
             claude_directory.clear();
+        // Antigravity는 아직 Hook을 등록하지 않고 로컬 기록만 읽는다. 테스트 데이터로 연 실행은 지정한 홈만 읽는다.
+        if (!antigravity_discovery || (custom_data && !custom_antigravity))
+            antigravity_directory.clear();
         session_board::board_driver driver {
             std::move(directory),
             open_detail,
@@ -129,6 +142,7 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
             std::move(detail_placement_file),
             appearance,
             std::move(appearance_file),
+            std::move(antigravity_directory),
         };
         const bool header_bottom { config.initial_placement.has_value() && session_board::load_widget_header_bottom(placement_file) };
         session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance, std::move(appearance), header_bottom };

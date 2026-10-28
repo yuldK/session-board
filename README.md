@@ -1,13 +1,13 @@
 # Session Board
 
-Claude Code와 Codex의 로컬 Hook 이벤트를 모아 보는 Windows C++20/luil 앱입니다.
+Claude Code·Codex·Google Antigravity의 로컬 Hook 이벤트와 세션 기록을 모아 보는 Windows C++20/luil 앱입니다.
 
 현재 포함된 기능:
 
 - provider별 세션 목록, 제목, 작업 폴더, 모델, 현재 도구, 마지막 활동 시간
 - 작업 중·승인 대기·입력 대기·응답 완료·중단·종료·오류 상태
 - Codex 원본 Hook 어댑터와 Claude/Codex 공통 정규화 이벤트 입력
-- provider 필터, 작업 중 필터, 스크롤, 밝은/어두운 테마
+- provider 필터(표식과 세션 수만 보이는 칩, 이름은 툴팁), 작업 중 필터, 스크롤, 밝은/어두운 테마
 - 기본 화면은 항상 위에 뜨는 간단 위젯이고, 필요할 때 상세 화면을 별도 창으로 함께 띄움
 - 위젯 목록 영역의 투명·흐림 배경과 0~100% 진하기 설정, 위젯·상세 화면의 밝게·시스템·어둡게 테마와 키 컬러
 - 위젯 목록이 흘러 넘칠 때 위·아래 끝이 옅어지며 사라지는 표시
@@ -15,10 +15,12 @@ Claude Code와 Codex의 로컬 Hook 이벤트를 모아 보는 Windows C++20/lui
 - 한 번에 하나만 실행되는 위젯과 다음 실행에 돌아오는 위젯·상세 창 자리·크기
 - 세션이 열린 Claude Code·Codex 창으로 바로 이동 (Hook이 창을 기록한 세션)
 - 앱을 닫아도 유지되는 세션별 스냅숏, 동시 쓰기 보호, 1초 내 변경 반영
-- 오래된 실행 상태를 완료로 오인하지 않는 `상태 확인 필요` 표시
+- 오래된 실행 상태를 완료로 오인하지 않는 `상태 확인 필요` 표시. 열린 세션의 결과 없는 도구는 `작업 중 · 12분째`로, 응답 도중 닫힌 세션은 `세션 종료`로 확정
+- Claude API 오류(`StopFailure`, 기록의 API 오류 응답)의 원인 표시: `오류 · 사용 한도 도달` 등
 
 - Claude Code·Codex 로컬 세션 자동 탐색과 앱 시작 시 두 provider의 Hook 자동 등록 ([Claude 연동](docs/claude-integration.md))
 - Claude 하위 에이전트·백그라운드 명령을 부모 세션 카드 아래 하위 행으로 표시 ([하위 세션 설계](docs/child-sessions-design.md))
+- Antigravity 로컬 대화 자동 탐색 ([Antigravity 연동](docs/antigravity-integration.md)). Hook 등록은 아직 하지 않습니다.
 
 데모(`send-demo.ps1`)의 행은 샘플 이벤트입니다.
 
@@ -185,6 +187,16 @@ WSL/원격/클라우드에서 실행되는 Hook은 이 Windows 저장소로 전�
 `--no-claude-hooks`는 자동 등록만, `--no-claude-discovery`는 Claude 수집 전체를 끕니다. `--claude-home <경로>`로 읽을 Claude 홈을 지정합니다.
 `--data-dir`나 `--claude-home`을 준 실행은 실제 Claude 설정을 바꾸지 않습니다. 자세한 근거와 한계는 [Claude 연동](docs/claude-integration.md)을 참고하세요.
 
+## Antigravity 연동
+
+기본 실행에서는 `%USERPROFILE%/.gemini` 아래 `antigravity`·`antigravity-ide`·`antigravity-cli` 폴더의 **이미 열린 Antigravity 대화를 자동 탐색**합니다.
+앱이 실제로 잠가 둔 `presence/<대화 ID>.lock`으로 열린 대화를 구별하고, `brain/<대화 ID>/.system_generated/logs/transcript.jsonl`의 추가분에서 공개 진행 메시지와 도구 동작을 읽습니다.
+대화 이름은 `annotations/<대화 ID>.pbtxt`에서, 작업 폴더는 도구 인자의 경로와 `config/projects/*.json`의 프로젝트 루트를 맞춰 찾습니다. SQLite DB는 열지 않습니다.
+`presence`가 없는 제품(IDE)의 기록은 최근 기록으로만 15분간 보입니다. 비공개 `thinking`, 명령 인자, 도구 출력은 표시하지 않습니다.
+
+아직 Hook은 등록하지 않습니다. 그래서 승인 대기는 구별하지 못하고 `작업 중`으로 보이며, 창 이동 단추는 꺼져 있습니다.
+`--no-antigravity-discovery`로 수집을 끄고, `--antigravity-home <경로>`로 읽을 홈을 지정합니다. `--data-dir`만 준 실행은 실제 Antigravity 홈을 읽지 않습니다.
+
 ## 검사
 
 ```powershell
@@ -195,7 +207,7 @@ ctest --preset vs2026-release
 ```
 
 포맷은 clang-format 22를 사용합니다. VS 2026의 C++ Clang 도구에서도 찾습니다.
-테스트는 두 provider 분리, 상태 전이, 오래된 이벤트, UTF-8 제목, 병렬 저장, 손상 파일 격리를 확인합니다.
+테스트는 provider 분리, 상태 전이, 오래된 이벤트, UTF-8 제목, 병렬 저장, 손상 파일 격리와 Antigravity 기록·잠금·대화 이름·작업 폴더 해석을 확인합니다.
 빌드 출력에는 luil 리소스의 제3자 고지와 Hook의 nlohmann/json 고지가 포함됩니다.
 
 선택적인 `tests/ui-smoke.ps1`은 설치된 `luil-uia` 스킬 도우미를 사용합니다.

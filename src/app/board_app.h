@@ -3,12 +3,14 @@
 #include "app/single_instance.h"
 #include "app/tray_icon.h"
 #include "app/widget_window.h"
+#include "core/antigravity_monitor.h"
 #include "core/claude_desktop.h"
 #include "core/claude_hooks.h"
 #include "core/claude_monitor.h"
 #include "core/codex_hooks.h"
 #include "core/codex_monitor.h"
 #include "core/notices.h"
+#include "core/providers.h"
 #include "core/session_updates.h"
 #include "core/store.h"
 #include "luil/luil.h"
@@ -177,7 +179,7 @@ namespace session_board {
     public:
         explicit board_driver(std::filesystem::path directory, bool open_detail = false, std::filesystem::path codex_directory = {}, std::filesystem::path claude_directory = {},
             std::optional<claude_hook_result> claude_hooks = std::nullopt, std::optional<codex_hook_result> codex_hooks = std::nullopt, std::filesystem::path detail_placement_file = {},
-            widget_appearance appearance = {}, std::filesystem::path appearance_file = {});
+            widget_appearance appearance = {}, std::filesystem::path appearance_file = {}, std::filesystem::path antigravity_directory = {});
         ~board_driver() override;
         void start() override;
         void handle(luil::app_message message) override;
@@ -203,8 +205,8 @@ namespace session_board {
         [[nodiscard]] std::unique_ptr<luil::ui_element> make_license_body(float width, float height, luil::virtual_list_element*& list_view, luil::virtual_list_element*& text_view);
         // 세션 열쇠로 그 세션이 열린 창을 찾아 앞으로 가져온다. 못 찾으면 이유를 알림 줄에 남긴다.
         void focus_session(const std::u8string& key);
-        // provider별 마지막 수신을 한 줄씩 `\n`으로 이은 글이다. 상세 화면 상태 표시줄과 위젯 바닥이 함께 쓴다.
-        [[nodiscard]] std::u8string signal_text(std::int64_t now) const;
+        // provider별 마지막 수신·수집 상태 한 줄씩이다. 상세 화면 상태 표시줄과 위젯 바닥이 함께 쓴다.
+        [[nodiscard]] std::vector<std::pair<std::string, std::u8string>> signal_lines(std::int64_t now) const;
         std::filesystem::path directory_ {};
         load_result data_ {};
         session_updates updates_ {};
@@ -214,6 +216,9 @@ namespace session_board {
         std::filesystem::path claude_directory_ {};
         std::unique_ptr<claude_monitor> claude_ {};
         claude_observation claude_data_ {};
+        std::filesystem::path antigravity_directory_ {};
+        std::unique_ptr<antigravity_monitor> antigravity_ {};
+        antigravity_observation antigravity_data_ {};
         // Claude 데스크톱이 연 세션의 색인이다. 이동 단추가 창 대신 그 세션을 연다.
         std::unique_ptr<claude_desktop_index> desktop_ {};
         std::chrono::steady_clock::time_point desktop_refresh_ {};

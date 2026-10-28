@@ -46,6 +46,8 @@ namespace session_board {
         bool background { false };
         // child_finished의 끝난 모양이다: completed, failed, stopped.
         std::string outcome {};
+        // failed의 원인이다. Claude `StopFailure`의 오류 종류(`rate_limit` 등)를 그대로 싣는다.
+        std::string failure {};
     };
 
     enum class child_kind
@@ -100,6 +102,8 @@ namespace session_board {
         // 데스크톱 앱에서 이 세션을 여는 ID다. 저장하지 않고 로컬 기록을 읽을 때마다 채운다.
         //  - Claude는 데스크톱이 붙인 `local_…` ID, Codex는 데스크톱 앱이 연 스레드의 세션 ID 그대로다.
         std::string desktop_session_id {};
+        // 오류로 끝난 원인이다. 오류가 아닌 상태로 바뀌면 비운다.
+        std::string failure {};
     };
 
     [[nodiscard]] std::int64_t now_ms();
@@ -111,6 +115,14 @@ namespace session_board {
     [[nodiscard]] session_snapshot parse_snapshot(const nlohmann::json& input);
     [[nodiscard]] std::string_view status_name(session_status status);
     [[nodiscard]] bool needs_attention(const session_snapshot& snapshot, std::int64_t time_ms);
+    // 열린 세션의 도구 하나가 오래 도는 중인가다. 결과가 아직 없는 도구와 살아 있는 세션이 근거라 `상태 확인 필요`로 보지 않는다.
+    [[nodiscard]] bool long_running_tool(const session_snapshot& snapshot, std::int64_t time_ms);
+    // 열려 있던 세션이 닫혔는데 마지막 상태가 작업 중이면 종료로 확정한다. 닫힌 세션은 더 이상 소식을 남기지 못한다.
+    void close_vanished_session(session_snapshot& snapshot, std::int64_t time_ms);
+    // 닫힘을 확정하기 전에 기다리는 시간이다. 쓰는 도중의 등록 파일이나 잠금을 다시 잡는 순간을 닫힘으로 읽지 않는다.
+    inline constexpr std::int64_t vanished_grace_ms { 2000 };
+    // 오류 종류를 화면에 쓰는 말로 바꾼다. 모르는 값은 일반 오류로 말한다.
+    [[nodiscard]] std::string failure_label(std::string_view failure);
     [[nodiscard]] bool is_working(session_status status);
     inline constexpr std::int64_t widget_retention_ms { 15 * 60 * 1000 };
     [[nodiscard]] bool is_widget_visible(const session_snapshot& snapshot, std::int64_t time_ms);

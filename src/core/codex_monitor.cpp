@@ -1,5 +1,7 @@
 #include "core/codex_monitor.h"
 
+#include "core/local_record.h"
+
 #include <shlobj.h>
 #include <windows.h>
 
@@ -16,7 +18,6 @@
 namespace session_board {
     namespace {
         constexpr std::size_t maximum_line { 256 * 1024 };
-        constexpr std::uint64_t read_budget { 8 * 1024 * 1024 };
 
         std::string text_field(const nlohmann::json& value, const char* key, const std::size_t limit = 360)
         {
@@ -39,30 +40,7 @@ namespace session_board {
 
         std::int64_t record_time(const nlohmann::json& record)
         {
-            const std::string text { text_field(record, "timestamp", 64) };
-            if (text.size() < 19)
-                return 0;
-            SYSTEMTIME time {};
-            try
-            {
-                time.wYear = static_cast<WORD>(std::stoi(text.substr(0, 4)));
-                time.wMonth = static_cast<WORD>(std::stoi(text.substr(5, 2)));
-                time.wDay = static_cast<WORD>(std::stoi(text.substr(8, 2)));
-                time.wHour = static_cast<WORD>(std::stoi(text.substr(11, 2)));
-                time.wMinute = static_cast<WORD>(std::stoi(text.substr(14, 2)));
-                time.wSecond = static_cast<WORD>(std::stoi(text.substr(17, 2)));
-                if (text.size() >= 23 && text[19] == '.')
-                    time.wMilliseconds = static_cast<WORD>(std::stoi(text.substr(20, 3)));
-            }
-            catch (...)
-            {
-                return 0;
-            }
-            FILETIME file {};
-            if (!SystemTimeToFileTime(&time, &file))
-                return 0;
-            const ULARGE_INTEGER ticks { file.dwLowDateTime, file.dwHighDateTime };
-            return static_cast<std::int64_t>(ticks.QuadPart / 10'000) - 11'644'473'600'000;
+            return iso_time_ms(text_field(record, "timestamp", 64));
         }
 
         std::string tool_activity(const std::string& name)
@@ -81,60 +59,14 @@ namespace session_board {
         struct tracked_file
         {
             codex_rollout reader {};
-            std::uint64_t position { 0 };
-            std::string partial {};
-            bool dropping { false };
+            jsonl_tail tail { maximum_line };
             bool ready { false };
             std::optional<session_snapshot> published {};
 
             void read(const std::filesystem::path& path)
             {
-                const auto size { std::filesystem::file_size(path) };
-                if (size < position)
-                    *this = tracked_file {};
-                std::ifstream input { path, std::ios::binary };
-                if (!input)
-                    return;
-                input.seekg(static_cast<std::streamoff>(position));
-                std::array<char, 32 * 1024> buffer {};
-                const auto until { std::min(size, position + read_budget) };
-                while (position < until && input)
-                {
-                    input.read(buffer.data(), static_cast<std::streamsize>(std::min<std::uint64_t>(buffer.size(), until - position)));
-                    const auto count { input.gcount() };
-                    position += static_cast<std::uint64_t>(count);
-                    for (std::streamsize index { 0 }; index < count; ++index)
-                    {
-                        const char character { buffer[static_cast<std::size_t>(index)] };
-                        if (character == '\n')
-                        {
-                            if (!dropping && !partial.empty())
-                            {
-                                const auto value { nlohmann::json::parse(partial, nullptr, false) };
-                                if (!value.is_discarded())
-                                    try
-                                    {
-                                        reader.consume(value);
-                                    }
-                                    catch (...)
-                                    {}
-                            }
-                            partial.clear();
-                            dropping = false;
-                        }
-                        else if (!dropping)
-                        {
-                            if (partial.size() < maximum_line)
-                                partial += character;
-                            else
-                            {
-                                partial.clear();
-                                dropping = true;
-                            }
-                        }
-                    }
-                }
-                ready = position >= size;
+                tail.read(path, [this] { reader = codex_rollout {}; }, [this](const nlohmann::json& value) { reader.consume(value); });
+                ready = tail.ready();
             }
         };
 
@@ -371,16 +303,7 @@ namespace session_board {
 
     bool codex_writer_active(const std::filesystem::path& lock_file)
     {
-        const HANDLE file { CreateFileW(lock_file.c_str(), GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr) };
-        if (file == INVALID_HANDLE_VALUE)
-            return GetLastError() == ERROR_SHARING_VIOLATION;
-        OVERLAPPED overlapped {};
-        const bool free { LockFileEx(file, LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &overlapped) != FALSE };
-        const DWORD error { GetLastError() };
-        if (free)
-            UnlockFileEx(file, 0, 1, 0, &overlapped);
-        CloseHandle(file);
-        return !free && error == ERROR_LOCK_VIOLATION;
+        return file_lock_held(lock_file);
     }
 
     std::wstring codex_desktop_link(const std::string_view thread_id)
@@ -458,6 +381,9 @@ namespace session_board {
     {
         std::map<std::filesystem::path, tracked_file> files {};
         std::map<std::string, std::string> names {};
+        // 이번 실행에서 작성 잠금을 본 스레드와, 그 뒤 잠금이 풀린 것을 처음 본 시각이다.
+        std::set<std::string> seen_loaded {};
+        std::map<std::string, std::int64_t> closed_at {};
         auto next_discovery { std::chrono::steady_clock::time_point {} };
         while (!stop.stop_requested())
         {
@@ -492,6 +418,19 @@ namespace session_board {
                         }
                         auto session { *file.published };
                         session.runtime_loaded = loaded.contains(session.session_id);
+                        if (session.runtime_loaded)
+                        {
+                            seen_loaded.insert(session.session_id);
+                            closed_at.erase(session.session_id);
+                        }
+                        // 잠금을 쥐던 앱이 대화를 닫았다. 응답 도중에 닫힌 대화는 더 이어지지 않는다.
+                        else if (seen_loaded.contains(session.session_id))
+                        {
+                            const auto time { now_ms() };
+                            const auto closed { closed_at.try_emplace(session.session_id, time).first->second };
+                            if (time - closed >= vanished_grace_ms)
+                                close_vanished_session(session, closed);
+                        }
                         if (const auto name { names.find(session.session_id) }; name != names.end())
                             session.name = name->second;
                         if (!session.runtime_loaded && now_ms() - session.updated_ms >= widget_retention_ms)

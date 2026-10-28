@@ -1,5 +1,6 @@
 #include "core/codex_monitor.h"
 #include "core/notices.h"
+#include "core/providers.h"
 #include "core/session_updates.h"
 #include "core/store.h"
 #include "core/widget_layout.h"
@@ -63,6 +64,60 @@ namespace session_board {
             require(!apply_event(snapshot, event("tool_started")), "Ended session reactivated.");
             require(apply_event(snapshot, event("session_started")), "Resume rejected.");
             require(snapshot.status == session_status::idle && !snapshot.turn_closed, "Resume failed.");
+        }
+
+        void failures_and_long_tools()
+        {
+            // 오류의 원인은 failed에만 남고, 정해진 꼴이 아니면 버린다. 다음 turn이 시작되면 지운다.
+            const auto claude_event = [](const std::string& kind, const std::string& reason) {
+                nlohmann::json input { { "schema_version", 1 }, { "provider", "claude" }, { "session_id", "test-session" }, { "turn_id", "turn-1" } };
+                input["event"] = kind;
+                input["timestamp_ms"] = now_ms();
+                input["failure"] = reason;
+                return parse_event(input);
+            };
+            const auto failure { claude_event("failed", "rate_limit") };
+            require(failure.failure == "rate_limit", "Failure reason lost.");
+            require(claude_event("failed", "Rate Limit!").failure.empty(), "Malformed failure reason kept.");
+            const auto stray { claude_event("turn_finished", "rate_limit") };
+            require(stray.failure.empty(), "Failure reason kept on a non-failure event.");
+            session_snapshot snapshot {};
+            require(apply_event(snapshot, event("turn_started", "claude")) && apply_event(snapshot, failure), "Failure rejected.");
+            require(snapshot.status == session_status::failed && snapshot.failure == "rate_limit", "Failure reason not stored.");
+            require(parse_snapshot(serialize_snapshot(snapshot)).failure == "rate_limit", "Failure reason not persisted.");
+            require(failure_label("rate_limit") == "사용 한도 도달" && failure_label("새 종류") == "API 오류", "Failure label differs.");
+            auto next { event("turn_started", "claude") };
+            next.turn_id = "turn-2";
+            require(apply_event(snapshot, next) && snapshot.failure.empty(), "Failure reason survived a new turn.");
+            require(valid_provider("antigravity") && !valid_provider("gemini"), "Provider table differs.");
+
+            // 열린 세션의 결과 없는 도구는 오래 돌아도 확인할 일이 아니다. 근거가 하나라도 없으면 예전처럼 의심한다.
+            session_snapshot running {};
+            running.status = session_status::running;
+            running.updated_ms = now_ms() - 11 * 60 * 1000;
+            running.active_tools = { "tool-1" };
+            require(needs_attention(running, now_ms()) && !long_running_tool(running, now_ms()), "Hook-only long tool trusted.");
+            running.runtime_loaded = true;
+            require(!needs_attention(running, now_ms()) && long_running_tool(running, now_ms()), "Open session's long tool needs attention.");
+            running.active_tools.clear();
+            require(needs_attention(running, now_ms()), "Silent open session without a tool trusted.");
+            running.status = session_status::waiting_approval;
+            running.active_tools = { "tool-1" };
+            require(needs_attention(running, now_ms()), "Long approval wait hidden.");
+
+            // 열린 것을 본 세션이 닫혔으면 작업 중 상태를 종료로 확정한다. 끝난 상태는 그대로 둔다.
+            session_snapshot vanished {};
+            vanished.status = session_status::running;
+            vanished.active_tools = { "tool-1" };
+            vanished.children.push_back({ .kind = child_kind::background_command, .child_id = "task-1", .status = session_status::running, .background = true });
+            close_vanished_session(vanished, 1000);
+            require(vanished.status == session_status::ended && vanished.turn_closed && vanished.active_tools.empty(), "Vanished session left working.");
+            require(vanished.children[0].status == session_status::ended && vanished.updated_ms == 1000, "Vanished session child left running.");
+            session_snapshot finished {};
+            finished.status = session_status::idle;
+            finished.turn_closed = true;
+            close_vanished_session(finished, 1000);
+            require(finished.status == session_status::idle && finished.updated_ms == 0, "Finished session rewritten on close.");
         }
 
         void widget_anchoring()
@@ -556,6 +611,7 @@ int main()
     try
     {
         session_board::lifecycle();
+        session_board::failures_and_long_tools();
         session_board::widget_anchoring();
         session_board::hidden_updates();
         session_board::persistent_responses();

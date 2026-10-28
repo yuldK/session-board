@@ -94,7 +94,7 @@ PATH의 CLI와 desktop 앱이 내장한 실행 파일의 버전이 다르다. �
 | `PermissionRequest` | `approval_requested` | `tool_use_id` 없음 |
 | `Notification` (`elicitation_dialog`, `elicitation_url_dialog`) | `input_requested` | |
 | `Stop` | `turn_finished` | `last_assistant_message`의 첫 문장을 `summary`로 |
-| `StopFailure` | `failed` | API 오류로 turn이 끝남 |
+| `StopFailure` | `failed` | API 오류로 turn이 끝남. `error`(`rate_limit` 등)를 `failure`로 싣는다. `last_assistant_message`는 오류 문구라 작업 설명으로 쓰지 않는다 |
 | `SessionEnd` | `session_ended` | |
 
 등록하지 않거나 버리는 것:
