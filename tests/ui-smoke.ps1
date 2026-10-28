@@ -51,28 +51,32 @@ using System.Runtime.InteropServices;
 public static class SessionBoardWindow {
     [DllImport("user32.dll")] public static extern IntPtr GetWindowLongPtrW(IntPtr window, int index);
     [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr word, IntPtr data);
+    [DllImport("user32.dll")] public static extern bool GetLayeredWindowAttributes(IntPtr window, out uint key, out byte alpha, out uint flags);
 }
 "@ -ErrorAction SilentlyContinue
 $handle = Find-LuilMainWindow -process_id __APP_PROCESS_ID__
 $style = [SessionBoardWindow]::GetWindowLongPtrW($handle, -16).ToInt64()
 $extended = [SessionBoardWindow]::GetWindowLongPtrW($handle, -20).ToInt64()
 $hit = 0
+# UpdateLayeredWindow로 내는 창은 색 키·전체 알파 속성이 없어 이 물음이 실패한다.
+$key = [uint32]0; $alpha = [byte]0; $flags = [uint32]0
+$attributes = if ([SessionBoardWindow]::GetLayeredWindowAttributes($handle, [ref]$key, [ref]$alpha, [ref]$flags)) { 1 } else { 0 }
 $grip = Find-LuilElement -id 'widget-resize'
 if ($null -ne $grip) {
     $bounds = $grip.Current.BoundingRectangle
     $point = [IntPtr]::new(([int]($bounds.Y + $bounds.Height / 2) -shl 16) -bor ([int]($bounds.X + $bounds.Width / 2) -band 65535))
     $hit = [SessionBoardWindow]::SendMessageW($handle, 0x84, [IntPtr]::Zero, $point).ToInt64()
 }
-'{0};{1};{2}' -f $style, $extended, $hit
+'{0};{1};{2};{3}' -f $style, $extended, $hit, $attributes
 '@
 
 function Assert-WidgetWindow([bool]$topmost = $true) {
     # 확인 코드는 격리 데스크톱의 작업자가 글로 받아 돌리므로 위젯 프로세스를 글에 넣어 보낸다.
     # Hook도 같은 이름의 프로세스라 이름으로 찾지 않는다.
-    $style, $extended, $hit = (Step ($window_probe.Replace('__APP_PROCESS_ID__', [string]$script:luil_process.Id))).Split(';') | ForEach-Object { [int64]$_ }
-    # 테두리 없음, 작업 표시줄 없음, 색상 키 대신 DWM 합성이다.
-    if (($style -band 0x00c00000) -ne 0 -or ($extended -band 0x80) -eq 0 -or ($extended -band 0x00080000) -ne 0) {
-        throw 'The widget must be a borderless tool window composed by DWM, not a color-keyed layered window.'
+    $style, $extended, $hit, $attributes = (Step ($window_probe.Replace('__APP_PROCESS_ID__', [string]$script:luil_process.Id))).Split(';') | ForEach-Object { [int64]$_ }
+    # 테두리 없음, 작업 표시줄 없음이다. 창 배치와 frame을 한 번에 내는 레이어드 창이되 색 키·전체 알파 속성은 쓰지 않는다.
+    if (($style -band 0x00c00000) -ne 0 -or ($extended -band 0x80) -eq 0 -or ($extended -band 0x00080000) -eq 0 -or $attributes -ne 0) {
+        throw 'The widget must be a borderless tool window presented with UpdateLayeredWindow, not a color-keyed layered window.'
     }
     if ((($extended -band 8) -ne 0) -ne $topmost) {
         throw "The widget topmost state should be $topmost."

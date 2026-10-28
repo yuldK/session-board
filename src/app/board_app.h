@@ -28,7 +28,9 @@ namespace session_board {
         float scale { 1.0f };
         bool header_bottom { false };
         float notification_room { 0.0f };
-        std::uint64_t layout_revision { 0 };
+        // 접힘 상태는 크기와 한 메시지로 온다. luil은 이 크기를 처리한 첫 tree로 창 크기를 바꾸므로 그 tree가 새
+        // 상태도 담아야 한다.
+        bool collapsed { false };
     };
     struct close_intent
     {};
@@ -72,9 +74,7 @@ namespace session_board {
     };
     struct widget_state_intent
     {
-        bool collapsed { false };
         bool pinned { true };
-        std::optional<metrics_intent> metrics {};
     };
     struct expand_session_intent
     {

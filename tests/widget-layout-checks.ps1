@@ -27,43 +27,7 @@ namespace SessionBoardLayoutTest {
         [DllImport("user32.dll")] public static extern IntPtr SendMessageW(IntPtr window, uint message, IntPtr word, IntPtr data);
         [DllImport("kernel32.dll")] public static extern uint GetCurrentThreadId();
         [DllImport("user32.dll")] public static extern IntPtr GetThreadDesktop(uint thread);
-        [DllImport("user32.dll")] public static extern IntPtr GetDC(IntPtr window);
-        [DllImport("user32.dll")] public static extern int ReleaseDC(IntPtr window, IntPtr dc);
-        [DllImport("gdi32.dll")] public static extern uint GetPixel(IntPtr dc, int x, int y);
         [DllImport("user32.dll", CharSet = CharSet.Unicode)] public static extern bool GetUserObjectInformationW(IntPtr handle, int index, StringBuilder value, int size, out uint needed);
-    }
-    public sealed class HeaderWatch : IDisposable {
-        private volatile bool running = true;
-        private readonly Thread thread;
-        public string Failure { get; private set; }
-        public int Samples { get; private set; }
-        public HeaderWatch(IntPtr window, int caption, int expectedY, int sampleX) {
-            Rect initial;
-            Native.GetWindowRect(window, out initial);
-            var dc = Native.GetDC(window);
-            var accent = Native.GetPixel(dc, sampleX, initial.bottom - initial.top - caption / 2);
-            Native.ReleaseDC(window, dc);
-            thread = new Thread(() => {
-                Native.SetThreadDpiAwarenessContext(new IntPtr(-4));
-                while (running) {
-                    Rect before, after;
-                    Native.GetWindowRect(window, out before);
-                    var surface = Native.GetDC(window);
-                    var top = Native.GetPixel(surface, sampleX, caption / 2);
-                    Native.ReleaseDC(window, surface);
-                    Native.GetWindowRect(window, out after);
-                    Samples++;
-                    if (before.top == after.top && before.bottom == after.bottom && before.top != expectedY && top == accent && accent != 0xffffffff) {
-                        Failure = "The rendered header appeared at " + before.top + " instead of " + expectedY;
-                        break;
-                    }
-                    Thread.Yield();
-                }
-            });
-            thread.IsBackground = true;
-            thread.Start();
-        }
-        public void Dispose() { running = false; thread.Join(); }
     }
 }
 '@
@@ -186,18 +150,11 @@ try {
     Assert-CaptionHit $bottom_y
     Assert-Layout ((Get-NativeHit ($box.left + 100) ($box.top + 24)) -eq 1) 'The old top caption position still exposes a drag or window-button target.'
     Save-LuilShot -path (Join-Path $work_directory 'header-bottom.png')
-    $header_watch = [SessionBoardLayoutTest.HeaderWatch]::new($window_handle, $caption, $bottom_y, [int](8 * $scale))
-    try {
-        foreach ($iteration in 1..40) {
-            Toggle-StableHeader $bottom_y $true
-            Toggle-StableHeader $bottom_y $false
-        }
+    # 배치 좌표만 본다. 창 DC의 픽셀은 DWM이 합성한 화면과 달라 전환 중 튐을 보지 못하므로 화면은 tests/widget-header-flash.ps1이 실제 데스크톱에서 잰다.
+    foreach ($iteration in 1..40) {
+        Toggle-StableHeader $bottom_y $true
+        Toggle-StableHeader $bottom_y $false
     }
-    finally {
-        $header_watch.Dispose()
-    }
-    Assert-Layout ([string]::IsNullOrEmpty($header_watch.Failure)) $header_watch.Failure
-    Assert-Layout ($header_watch.Samples -gt 0) 'No transition pixels were observed.'
     Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
     $null = Wait-LuilElement -id 'widget-signal' -absent
     $null = Wait-Header $bottom_y
@@ -279,7 +236,7 @@ try {
     $null = Wait-LuilElement -name '사용자 입력을 기다립니다' -all_surfaces
     Assert-Layout (-not (Wait-LuilElement -name '응답 대기' -all_surfaces).Current.IsEnabled) 'Input request was not retained as a persistent notification.'
     @{
-        checks = $checks; desktop = $desktop_name.ToString(); scale = $scale; isolated = $true; transition_samples = $header_watch.Samples
+        checks = $checks; desktop = $desktop_name.ToString(); scale = $scale; isolated = $true
         header_top = $true; header_bottom = $true; header_anchor = $true; caption_hit = $true; work_area_limit = $true
         notification_above = $true; notification_below = $true; only_response_requests = $true; notification_scroll = $true
         persistent_response = $true; external_response_expiry = $true; collapse_cycles = 40

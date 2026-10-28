@@ -31,6 +31,9 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         config.class_name = L"SessionBoard.Main";
         config.caption = session_board::widget_caption();
         config.icon_resource = IDI_SESSION_BOARD;
+        // 머릿줄을 아래에 둔 위젯은 위쪽 끝을 움직여 접고 펼친다. 창 배치와 그 크기의 frame을 한 합성에 내야 머릿줄이
+        // 한 frame 동안 위로 튀지 않는다.
+        config.presentation = luil::win32::window_presentation::layered;
         // 주 창은 위젯이다. 상세 화면은 위젯에서 여는 독립 창이다.
         config.initial_width = session_board::widget_width;
         config.initial_height = session_board::widget_height;

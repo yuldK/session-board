@@ -6,7 +6,6 @@
 
 #include <cstdint>
 #include <functional>
-#include <optional>
 
 namespace session_board {
     inline constexpr std::uint32_t toggle_collapse_command { 2 };
@@ -25,14 +24,16 @@ namespace session_board {
     inline constexpr int widget_caption_height { 40 };
 
     // 목록 영역 뒤를 어떻게 보일지다. 앱 그림의 투명도는 그대로 두고 DWM이 뒤를 합성하는 방식만 바꾼다.
-    // 진하기가 100%면 이 값과 관계없이 DWM 합성을 끄고 불투명 창으로 둔다.
+    // 진하기가 100%면 이 값과 관계없이 효과를 끄고 불투명하게 그린다.
+    //  - 위젯은 레이어드 창이라 시스템 배경 효과(DWMSBT)가 단색 판이 된다. 흐림 둘은 비공개 accent API로 건다.
+    //    그 API가 없는 Windows에서는 둘 다 투명처럼 뒤가 그대로 비친다.
     enum class widget_backdrop
     {
-        // 뒤를 흐리고 Windows가 정한 색 막과 잡티 무늬를 덧씌운다 (Windows 11 Acrylic).
+        // 뒤를 흐리고 명암에 맞춘 색 막을 덧씌운다 (accent acrylic).
         acrylic,
         // 뒤가 그대로 비친다.
         transparent,
-        // 뒤를 흐리기만 하고 색을 덧씌우지 않는다. 비공개 API라 없는 Windows에서는 Acrylic으로 물러선다.
+        // 뒤를 흐리기만 하고 색을 덧씌우지 않는다.
         blur,
     };
 
@@ -52,7 +53,8 @@ namespace session_board {
         widget_window(const widget_window&) = delete;
         widget_window& operator=(const widget_window&) = delete;
         // 저장한 배치로 연 창이면 `keep_size`를 켠다. luil이 이미 그 크기로 세웠다.
-        [[nodiscard]] bool attach(bool keep_size, bool header_bottom, std::function<void()> layout_changed, std::function<bool(std::uint64_t)> layout_ready);
+        // `dark`는 지금 앱 테마가 어두운가다. acrylic 색 막을 명암에 맞춘다.
+        [[nodiscard]] bool attach(bool keep_size, bool header_bottom, std::function<void()> layout_changed, std::function<bool()> dark);
         void set_backdrop(widget_backdrop backdrop);
         // 진하기를 0~1로 다듬어 둔다. 100%에 들어서거나 벗어날 때만 합성을 다시 건다.
         void set_opacity(float opacity);
@@ -61,8 +63,8 @@ namespace session_board {
         [[nodiscard]] HWND handle() const noexcept;
         [[nodiscard]] bool collapsed() const noexcept;
         [[nodiscard]] bool header_bottom() const noexcept;
-        [[nodiscard]] std::uint64_t layout_revision() const noexcept;
-        [[nodiscard]] std::optional<RECT> pending_bounds() const noexcept;
+        // 마지막으로 맞춘 창 사각형이다. luil이 크기 변경을 새 frame과 함께 내려고 미루는 동안에도 그 목표 자리다.
+        [[nodiscard]] RECT bounds() const noexcept;
         [[nodiscard]] int notification_room() const noexcept;
         // 접기 전 높이(물리 픽셀)다. 접힌 채 닫아도 다음 실행은 펼친 크기로 연다.
         [[nodiscard]] int expanded_height() const noexcept;
@@ -72,11 +74,11 @@ namespace session_board {
 
     private:
         // luil이 창 상태가 바뀔 때 DWM 테두리를 자기 값으로 되돌리므로 그 뒤에 다시 건다.
-        void apply_composition() const;
+        void apply_composition();
         void fit_position(WINDOWPOS& position);
-        void apply_pending_layout();
         static LRESULT CALLBACK subclass(HWND window, UINT message, WPARAM word, LPARAM data, UINT_PTR id, DWORD_PTR reference);
         HWND window_ { nullptr };
+        RECT bounds_ {};
         bool collapsed_ { false };
         bool pinned_ { true };
         widget_backdrop backdrop_ { widget_backdrop::acrylic };
@@ -87,8 +89,8 @@ namespace session_board {
         bool dragging_caption_ { false };
         POINT drag_offset_ {};
         std::function<void()> layout_changed_ {};
-        std::function<bool(std::uint64_t)> layout_ready_ {};
-        std::optional<RECT> pending_bounds_ {};
-        std::uint64_t layout_revision_ { 0 };
+        std::function<bool()> dark_ {};
+        // acrylic 색 막을 건 명암이다. 테마가 바뀌면 다시 건다.
+        bool tinted_dark_ { true };
     };
 } // namespace session_board

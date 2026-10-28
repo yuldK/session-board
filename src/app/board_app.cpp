@@ -1349,8 +1349,17 @@ namespace session_board {
         }
         else if (const auto* metrics { message.get<metrics_intent>() }; metrics != nullptr)
         {
-            if (metrics->layout_revision >= metrics_.layout_revision)
-                metrics_ = *metrics;
+            if (metrics->collapsed != collapsed_)
+            {
+                if (metrics->collapsed)
+                    update_scroll_ = 0.0f;
+                collapsed_ = metrics->collapsed;
+                if (!collapsed_)
+                    updates_.clear();
+                else
+                    updates_.observe(data_.sessions, true);
+            }
+            metrics_ = *metrics;
         }
         else if (message.get<refresh_intent>() != nullptr)
             reload();
@@ -1413,18 +1422,7 @@ namespace session_board {
         else if (const auto* focus { message.get<focus_session_intent>() }; focus != nullptr)
             focus_session(focus->key);
         else if (const auto* widget { message.get<widget_state_intent>() }; widget != nullptr)
-        {
-            if (widget->collapsed && !collapsed_)
-                update_scroll_ = 0.0f;
-            collapsed_ = widget->collapsed;
             pinned_ = widget->pinned;
-            if (widget->metrics.has_value())
-                metrics_ = *widget->metrics;
-            if (!collapsed_)
-                updates_.clear();
-            else
-                updates_.observe(data_.sessions, true);
-        }
         else if (const auto* expand { message.get<expand_session_intent>() }; expand != nullptr)
             expanded_session_ = expanded_session_ == expand->owner ? std::u8string {} : expand->owner;
         else if (const auto* select { message.get<select_session_intent>() }; select != nullptr)
@@ -1846,7 +1844,7 @@ namespace session_board {
         const float width { metrics_.width > 0.0f ? metrics_.width : static_cast<float>(widget_width) * scale };
         const float height { metrics_.height > 0.0f ? metrics_.height : static_cast<float>(widget_height) * scale };
         const float inner_width { width / scale };
-        auto root { std::make_unique<luil::root_element>(u8"widget-layout-" + u8(std::to_string(metrics_.layout_revision))) };
+        auto root { std::make_unique<luil::root_element>() };
         root->arrange({ { 0.0f, 0.0f, width, height }, scale });
 
         std::vector<const session_snapshot*> visible {};
@@ -1957,7 +1955,7 @@ namespace session_board {
                 auto mode_element { std::make_unique<luil::choice_group_element>(std::move(mode)) };
                 mode_element->set_enabled(!opaque);
                 mode_element->set_tooltip(
-                    opaque ? u8"진하기가 100%라 뒤가 비치지 않습니다" : u8"투명은 뒤가 그대로 비치고, 흐림은 뒤를 흐리기만 하며, Acrylic은 흐린 뒤에 Windows의 색 막을 덧씌웁니다");
+                    opaque ? u8"진하기가 100%라 뒤가 비치지 않습니다" : u8"투명은 뒤가 그대로 비치고, 흐림은 뒤를 흐리기만 하며, Acrylic은 흐린 뒤에 명암에 맞춘 색 막을 덧씌웁니다");
                 effect_row->add_fit(std::move(mode_element));
                 effect_row->add_flexible_gap();
                 settings->add(std::move(effect_row), widget_setting_row);
@@ -2346,14 +2344,14 @@ namespace session_board {
         if (!window_.attach(
                 restored_, header_bottom_,
                 [this, &host] {
-                    RECT client {};
-                    GetClientRect(window_.handle(), &client);
+                    const RECT box { window_.bounds() };
                     const float scale { static_cast<float>(GetDpiForWindow(window_.handle())) / 96.0f };
-                    host.post_app_message(make_window_metrics_message(static_cast<float>(client.right), static_cast<float>(client.bottom), scale));
+                    host.post_app_message(make_window_metrics_message(static_cast<float>(box.right - box.left), static_cast<float>(box.bottom - box.top), scale));
                 },
-                [&host](const std::uint64_t revision) {
+                [&host] {
                     const auto frame { host.acquire_frame() };
-                    return frame != nullptr && frame->tree != nullptr && frame->tree->root() != nullptr && frame->tree->root()->id().owner == u8"widget-layout-" + u8(std::to_string(revision));
+                    const auto theme { frame != nullptr ? frame->appearance.theme : luil::theme_preference::system };
+                    return theme == luil::theme_preference::system ? system_dark() : theme == luil::theme_preference::dark;
                 }))
         {
             host.post_app_message(luil::app_message { widget_failed_intent {} });
@@ -2384,18 +2382,13 @@ namespace session_board {
 
     void board_delegate::execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command)
     {
-        if (command.command == toggle_collapse_command || command.command == toggle_pin_command)
+        // 접힘 상태는 창 크기를 바꾸며 luil이 알리는 metrics에 실려 간다.
+        if (command.command == toggle_collapse_command)
+            window_.toggle_collapse();
+        else if (command.command == toggle_pin_command)
         {
-            std::optional<metrics_intent> metrics {};
-            if (command.command == toggle_collapse_command)
-            {
-                window_.toggle_collapse();
-                const auto message { make_window_metrics_message(0.0f, 0.0f, static_cast<float>(GetDpiForWindow(window_.handle())) / 96.0f) };
-                metrics = *message.get<metrics_intent>();
-            }
-            else
-                window_.toggle_pin();
-            host.post_app_message(luil::app_message { widget_state_intent { window_.collapsed(), window_.pinned(), metrics } });
+            window_.toggle_pin();
+            host.post_app_message(luil::app_message { widget_state_intent { window_.pinned() } });
         }
         else if (command.command == backdrop_acrylic_command || command.command == backdrop_transparent_command || command.command == backdrop_blur_command)
         {
@@ -2418,14 +2411,14 @@ namespace session_board {
 
     luil::app_message board_delegate::make_window_metrics_message(const float width, const float height, const float scale)
     {
-        const auto pending { window_.pending_bounds() };
+        // 레이어드 표시에서 luil은 미룬 배치의 크기로 부른다. 머릿줄 방향·알림 자리도 그 배치의 것이다.
         metrics_intent metrics {};
-        metrics.width = pending.has_value() ? static_cast<float>(pending->right - pending->left) : width;
-        metrics.height = pending.has_value() ? static_cast<float>(pending->bottom - pending->top) : height;
+        metrics.width = width;
+        metrics.height = height;
         metrics.scale = scale;
         metrics.header_bottom = window_.header_bottom();
         metrics.notification_room = static_cast<float>(window_.notification_room());
-        metrics.layout_revision = window_.layout_revision();
+        metrics.collapsed = window_.collapsed();
         return luil::app_message { metrics };
     }
 
