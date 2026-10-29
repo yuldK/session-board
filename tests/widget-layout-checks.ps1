@@ -92,7 +92,11 @@ function Wait-Header([double]$y) {
 }
 
 function Get-UpdateSurface {
-    $element = Wait-LuilElement -id 'update-count' -all_surfaces
+    return Get-PopupSurface 'update-count'
+}
+
+function Get-PopupSurface([string]$id) {
+    $element = Wait-LuilElement -id $id -all_surfaces
     $walker = [System.Windows.Automation.TreeWalker]::RawViewWalker
     while ($null -ne $element) {
         $handle = $element.Current.NativeWindowHandle
@@ -138,6 +142,18 @@ try {
     $null = Wait-LuilElement -id 'widget-signal' -absent
     $null = Wait-Header $top_y
     Assert-Layout (((Get-Box).bottom - (Get-Box).top) -eq $caption) 'Collapsed widget did not keep only the header.'
+    # 목록을 접어 둔 채로도 테마와 배경 설정을 고른다. 판은 머릿줄 아래에 뜨는 팝업이고 한 번에 하나만 뜬다.
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')
+    $settings = (Get-PopupSurface 'theme-mode').Current.BoundingRectangle
+    Assert-Layout ($settings.Top -ge (Get-Box).bottom -and $settings.Bottom -le $work.bottom) 'Theme settings did not open below the collapsed header.'
+    Assert-Layout (((Get-Box).bottom - (Get-Box).top) -eq $caption) 'Opening theme settings expanded the collapsed widget.'
+    Save-LuilShot -path (Join-Path $work_directory 'settings-theme-collapsed.png') -surface (Get-PopupSurface 'theme-mode')
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Wait-LuilElement -id 'widget-opacity' -all_surfaces
+    Assert-Layout ($null -eq (Find-LuilElement -id 'theme-mode' -all_surfaces)) 'Two settings panels were open at once.'
+    Save-LuilShot -path (Join-Path $work_directory 'settings-backdrop-collapsed.png') -surface (Get-PopupSurface 'widget-opacity')
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Wait-LuilElement -id 'widget-opacity' -all_surfaces -absent
     Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
     $null = Wait-LuilElement -id 'widget-signal'
     $null = Wait-Header $top_y
@@ -173,11 +189,11 @@ try {
     Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
     $null = Wait-LuilElement -id 'widget-signal' -absent
     Send-Update '동작 중 알림 금지' 'running-notice'
-    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 2'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 2 · 완료 0 · 새 알림 0'
     Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'A newly running session generated a popup.'
     # 작업 중이던 세션이 끝나면 무엇이 끝났는지 놓치지 않게 닫을 때까지 남는 알림을 띄운다.
     Send-Update '작업 완료 알림' 'running-notice' 'turn_finished'
-    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 1'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 1 · 완료 1 · 새 알림 1'
     $null = Wait-LuilElement -id 'update-count' -name '작업 끝남 1개' -all_surfaces
     $null = Wait-LuilElement -name '작업 완료 알림' -all_surfaces
     $done_button = Wait-LuilElement -search 'update-.*-confirm' -name '닫기' -all_surfaces
@@ -198,9 +214,34 @@ try {
     Assert-Layout ($focus_button.Current.Name -match '세션 창으로 이동|창 정보가 없습니다') 'Notification card has no session focus button.'
     Assert-Layout (-not $waiting_button.Current.IsEnabled) 'An outstanding response notification can be dismissed.'
     Send-Update '알림을 만들지 않는 진행 메시지' 'ordinary-notice'
-    $null = Wait-LuilElement -id 'widget-count' -name '확인 1 · 진행 2'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 1 · 진행 2 · 완료 1 · 새 알림 1'
     $null = Wait-LuilElement -id 'update-count' -name '확인 필요 1개' -all_surfaces
     Assert-Layout ($null -eq (Find-LuilElement -name '알림을 만들지 않는 진행 메시지' -all_surfaces)) 'Ordinary progress appeared alongside the response request.'
+    Save-LuilShot -path (Join-Path $work_directory 'header-counts.png')
+
+    # 표식이 넷 다 서면 가장 좁은 위젯의 머릿줄에는 단추가 다 들지 않는다. 닫기만 남기고 하나로 모아 팝업으로 펼친다.
+    Move-Widget $x $top_y ([int](320 * $scale)) $caption
+    $null = Wait-LuilElement -id 'widget-more'
+    Assert-Layout ($null -eq (Find-LuilElement -id 'widget-collapse')) 'Narrow header kept every button.'
+    $null = Wait-LuilElement -id 'compact-close'
+    Save-LuilShot -path (Join-Path $work_directory 'header-narrow.png')
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-more')
+    $actions = (Get-PopupSurface 'widget-collapse').Current.BoundingRectangle
+    $more = (Wait-LuilElement -id 'widget-more').Current.BoundingRectangle
+    Assert-Layout ($actions.Top -ge $more.Bottom -and [Math]::Abs($actions.Right - $more.Right) -le [Math]::Ceiling(8 * $scale)) 'Gathered buttons did not open under their button.'
+    Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'Notifications overlapped the gathered buttons.'
+    Save-LuilShot -path (Join-Path $work_directory 'header-gathered.png') -surface (Get-PopupSurface 'widget-collapse')
+    # 모은 단추에서 연 설정 판은 모은 단추 팝업을 대신한다.
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-theme' -all_surfaces)
+    $null = Wait-LuilElement -id 'theme-mode' -all_surfaces
+    Assert-Layout ($null -eq (Find-LuilElement -id 'widget-collapse' -all_surfaces)) 'Gathered buttons stayed open beside the settings panel.'
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-more')
+    $null = Wait-LuilElement -id 'widget-collapse' -all_surfaces
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-more')
+    $null = Wait-LuilElement -id 'widget-collapse' -all_surfaces -absent
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces
+    Move-Widget $x $top_y $width $caption
+    $null = Wait-LuilElement -id 'widget-collapse'
 
     Move-Widget $x $bottom_y $width $caption
     $null = Wait-Header $bottom_y
@@ -208,6 +249,14 @@ try {
     $popup_box = $popup.Current.BoundingRectangle
     Assert-Layout ($popup_box.Bottom -le (Get-Box).top -and $popup_box.Top -ge $work.top) 'Response notification was not above the bottom header or escaped the work area.'
     Save-LuilShot -path (Join-Path $work_directory 'notification-above.png') -surface $popup
+    # 바닥 머릿줄에서는 설정 판도 위로 뜬다. 판이 떠 있는 동안 알림 판은 숨었다가 닫으면 돌아온다.
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')
+    $settings = (Get-PopupSurface 'theme-mode').Current.BoundingRectangle
+    Assert-Layout ($settings.Bottom -le (Get-Box).top -and $settings.Top -ge $work.top) 'Theme settings were not above the bottom header or escaped the work area.'
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces -absent
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')
+    $null = Wait-LuilElement -id 'theme-mode' -all_surfaces -absent
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces
     Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
     $null = Wait-LuilElement -id 'widget-signal'
     $null = Wait-LuilElement -id 'update-count' -all_surfaces -absent

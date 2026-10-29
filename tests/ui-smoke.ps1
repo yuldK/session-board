@@ -139,56 +139,56 @@ try {
     $null = Step "Wait-LuilElement -id 'theme' -name '밝게' -all_surfaces"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'detail-dark.png')' -surface (Get-LuilSurfaces | Where-Object { `$_.Current.Name -like '*상세*' })"
 
-    # 위젯 배경을 투명 칩으로 바꾸고 진하기를 고른 뒤 설정 줄을 다시 접는다.
+    # 위젯 배경을 투명 칩으로 바꾸고 진하기를 고른 뒤 설정 판을 닫는다. 판은 위젯 밖에 뜨는 팝업이다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-transparent')"
-    $blur = Step "(Get-LuilState (Wait-LuilElement -id 'backdrop-blur')).selected"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-transparent' -all_surfaces)"
+    $blur = Step "(Get-LuilState (Wait-LuilElement -id 'backdrop-blur' -all_surfaces)).selected"
     if ("$blur" -notmatch 'False') {
         throw 'The blur choice stayed selected.'
     }
     # 색 없는 흐림과 Acrylic도 고를 수 있다.
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-blur')"
-    $plain = Step "(Get-LuilState (Wait-LuilElement -id 'backdrop-blur')).selected"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-blur' -all_surfaces)"
+    $plain = Step "(Get-LuilState (Wait-LuilElement -id 'backdrop-blur' -all_surfaces)).selected"
     if ("$plain" -notmatch 'True') {
         throw 'The plain blur choice was not selected.'
     }
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-acrylic')"
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-transparent')"
-    $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity')"
-    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '50%'"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-acrylic' -all_surfaces)"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'backdrop-transparent' -all_surfaces)"
+    $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity' -all_surfaces)"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -all_surfaces -name '50%'"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-settings.png')'"
     # 진하기 100%는 DWM 합성을 끈 불투명 창이라 흐림 스위치가 할 일이 없다. 0%까지 내릴 수 있다.
-    $null = Step "Set-LuilScroll -fraction 1 (Wait-LuilElement -id 'widget-opacity')"
-    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '100%'"
-    $blur_enabled = Step "(Wait-LuilElement -id 'widget-backdrop-mode').Current.IsEnabled"
+    $null = Step "Set-LuilScroll -fraction 1 (Wait-LuilElement -id 'widget-opacity' -all_surfaces)"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -all_surfaces -name '100%'"
+    $blur_enabled = Step "(Wait-LuilElement -id 'widget-backdrop-mode' -all_surfaces).Current.IsEnabled"
     if ("$blur_enabled" -notmatch 'False') {
         throw 'The backdrop choice stayed enabled at full opacity.'
     }
-    $null = Step "Set-LuilScroll -fraction 0 (Wait-LuilElement -id 'widget-opacity')"
-    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '0%'"
-    $blur_enabled = Step "(Wait-LuilElement -id 'widget-backdrop-mode').Current.IsEnabled"
+    $null = Step "Set-LuilScroll -fraction 0 (Wait-LuilElement -id 'widget-opacity' -all_surfaces)"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -all_surfaces -name '0%'"
+    $blur_enabled = Step "(Wait-LuilElement -id 'widget-backdrop-mode' -all_surfaces).Current.IsEnabled"
     if ("$blur_enabled" -notmatch 'True') {
         throw 'The backdrop choice stayed disabled below full opacity.'
     }
-    $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity')"
-    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -name '50%'"
+    $null = Step "Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-opacity' -all_surfaces)"
+    $null = Step "Wait-LuilElement -id 'widget-opacity-value' -all_surfaces -name '50%'"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')"
-    $null = Step "Wait-LuilElement -id 'widget-backdrop-mode' -absent"
+    $null = Step "Wait-LuilElement -id 'widget-backdrop-mode' -all_surfaces -absent"
 
-    # 위젯의 테마 단추는 밝게·시스템·어둡게 카드와 키 컬러를 고르는 설정 줄을 펼친다.
+    # 위젯의 테마 단추는 밝게·시스템·어둡게 카드와 키 컬러를 고르는 설정 판을 띄운다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')"
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'widget-accent/violet')"
-    $accent = Step "(Get-LuilState (Wait-LuilElement -id 'widget-accent/violet')).selected"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'widget-accent/violet' -all_surfaces)"
+    $accent = Step "(Get-LuilState (Wait-LuilElement -id 'widget-accent/violet' -all_surfaces)).selected"
     if ("$accent" -notmatch 'True') {
         throw 'The accent swatch was not selected.'
     }
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-mode/light')"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-mode/light' -all_surfaces)"
     $null = Step "Wait-LuilElement -id 'theme' -name '어둡게' -all_surfaces"
     $null = Step "Save-LuilShot -path '$(Join-Path $data_directory 'widget-theme.png')'"
-    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-mode/dark')"
+    $null = Step "Select-LuilItem (Wait-LuilElement -id 'theme-mode/dark' -all_surfaces)"
     $null = Step "Wait-LuilElement -id 'theme' -name '밝게' -all_surfaces"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-theme')"
-    $null = Step "Wait-LuilElement -id 'widget-accent' -absent"
+    $null = Step "Wait-LuilElement -id 'widget-accent' -all_surfaces -absent"
 
     $null = Step "Wait-LuilElement -id 'compact-$codex_owner' -search 'Codex.*응답 완료.*UI 실시간 갱신'"
     Send-Codex 'SessionEnd'

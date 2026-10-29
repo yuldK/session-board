@@ -1217,6 +1217,18 @@ namespace session_board {
         constexpr float widget_theme_card_width { 88.0f };
         constexpr float widget_theme_preview_height { 46.0f };
         constexpr float widget_theme_card_gap { 8.0f };
+        // 머릿줄의 상태 표식이다. 칸 폭은 재지 않고 표식·자릿수로 어림한다 (11px 숫자 한 자는 7px 안에 든다).
+        constexpr float header_mark_size { 12.0f };
+        constexpr float header_mark_spacing { 2.0f };
+        constexpr float header_digit_width { 7.0f };
+        constexpr float header_count_gap { 6.0f };
+        // 단추를 모을지 정할 때 제목에 남겨 둘 폭이다. 이보다 좁으면 제목이 말줄임으로 줄어든다.
+        constexpr float header_title_minimum { 84.0f };
+        constexpr float header_spacing { 2.0f };
+        // 판 팝업과 위젯 사이다.
+        constexpr float widget_panel_gap { 6.0f };
+        constexpr float widget_actions_gap { 2.0f };
+        constexpr float widget_actions_inset { 6.0f };
 
         std::unique_ptr<luil::button_element> widget_button(const std::u8string& id, const std::u8string& name, const char32_t glyph, luil::ui_action action, const bool active = false)
         {
@@ -1236,6 +1248,93 @@ namespace session_board {
                 return { luil::app_ui_command { command } };
             };
         }
+
+        // 판 팝업을 닫는 계기다. 위젯을 끌어 옮기거나 크기를 바꾸는 동안은 판이 따라오게 둔다.
+        std::function<luil::input_action(luil::popup_dismiss_reason)> close_panel(const widget_panel panel)
+        {
+            return [panel](const luil::popup_dismiss_reason reason) {
+                if (reason == luil::popup_dismiss_reason::pointer_press_outside || reason == luil::popup_dismiss_reason::escape_key
+                    || reason == luil::popup_dismiss_reason::activation_changed || reason == luil::popup_dismiss_reason::anchor_closed)
+                    return luil::make_app_action(widget_panel_intent { panel, false });
+                return luil::input_action {};
+            };
+        }
+
+        // 머릿줄 상태 표식 하나다. 수가 0이면 세우지 않는다.
+        struct header_count
+        {
+            std::u8string id {};
+            std::u8string name {};
+            // 0이면 작업 중 회전 표시다.
+            char32_t glyph { 0 };
+            std::size_t count { 0 };
+        };
+
+        float header_count_width(const header_count& item)
+        {
+            return header_mark_size + header_mark_spacing + header_digit_width * static_cast<float>(std::to_string(item.count).size());
+        }
+
+        float header_counts_width(const std::vector<header_count>& counts)
+        {
+            float width { 0.0f };
+            for (const auto& item : counts)
+                if (item.count > 0)
+                    width += (width > 0.0f ? header_count_gap : 0.0f) + header_count_width(item);
+            return width;
+        }
+
+        // 머릿줄의 상태 표식 줄이다. 보조 기술에는 표식을 하나씩 읽히지 않고 네 수를 한 문장으로 알린다.
+        class header_status final : public luil::ui_element
+        {
+        public:
+            header_status(const std::vector<header_count>& counts)
+                : ui_element { luil::ui_element_id { kind_label, u8"widget-count" } }
+            {
+                const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = header_count_gap, .cross_alignment = luil::stack_alignment::center };
+                auto row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-count-row" }, row_config) };
+                for (const auto& item : counts)
+                {
+                    name_ += (name_.empty() ? std::u8string {} : std::u8string { u8" · " }) + item.name + u8" " + u8(std::to_string(item.count));
+                    if (item.count == 0)
+                        continue;
+                    const luil::stack_config chip_config { .direction = luil::stack_direction::row, .spacing = header_mark_spacing, .cross_alignment = luil::stack_alignment::center };
+                    auto chip { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, item.id }, chip_config) };
+                    std::unique_ptr<luil::ui_element> mark {};
+                    if (item.glyph == 0)
+                        mark = std::make_unique<luil::spinner_element>(luil::ui_element_id { kind_layout, item.id + u8"-mark" }, luil::spinner_config { .size = header_mark_size });
+                    else
+                        mark = std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_layout, item.id + u8"-mark" }, luil::glyph_config { .glyph = item.glyph, .font_size = header_mark_size });
+                    mark->set_hit_opaque(false);
+                    chip->add(std::move(mark), { .length = header_mark_size, .cross_length = header_mark_size });
+                    chip->add_flexible(label(item.id + u8"-value", u8(std::to_string(item.count)), 11.0f));
+                    row->add(std::move(chip), header_count_width(item));
+                }
+                add_child(std::move(row));
+                set_tooltip(name_);
+                set_hit_opaque(false);
+            }
+
+            void arrange(const luil::arrange_context& context) override
+            {
+                set_bounds(context.slot);
+                for (const auto& child : children())
+                    child->arrange(context.for_child(context.slot));
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot& interaction) const override
+            {
+                draw_children(context, interaction);
+            }
+
+            [[nodiscard]] luil::access_info accessibility() const override
+            {
+                return { .role = luil::access_role::static_text, .name = name_ };
+            }
+
+        private:
+            std::u8string name_ {};
+        };
 
         // 키 컬러로 채운 머릿줄 위의 색이다. 글·아이콘·hover가 모두 `accent_foreground`에서 나온다.
         void caption_tint(luil::ui_color_palette& palette)
@@ -1699,16 +1798,27 @@ namespace session_board {
             backdrop_ = backdrop->backdrop;
         else if (const auto* opacity { message.get<opacity_intent>() }; opacity != nullptr)
             opacity_ = std::clamp(opacity->value, 0.0f, 1.0f);
-        // 설정 줄은 한 번에 하나만 펼친다. 둘이 함께 위젯 높이를 잡아먹지 않게 한다.
-        else if (message.get<backdrop_settings_intent>() != nullptr)
+        // 판은 한 번에 하나만 뜬다. 닫힘은 지금 그 판이 떠 있을 때만 듣는다 — 늦게 온 닫힘이 새로 연 판을 닫지 않는다.
+        else if (const auto* panel { message.get<widget_panel_intent>() }; panel != nullptr)
         {
-            backdrop_settings_open_ = !backdrop_settings_open_;
-            theme_settings_open_ = false;
+            if (panel->open)
+                panel_ = panel->panel;
+            else if (panel_ == panel->panel)
+                panel_ = widget_panel::none;
+            actions_close_at_.reset();
         }
-        else if (message.get<theme_settings_intent>() != nullptr)
+        else if (const auto* hover { message.get<actions_hover_intent>() }; hover != nullptr)
         {
-            theme_settings_open_ = !theme_settings_open_;
-            backdrop_settings_open_ = false;
+            (hover->popup ? actions_popup_hover_ : actions_trigger_hover_) = hover->inside;
+            if (hover->inside)
+            {
+                actions_close_at_.reset();
+                // 머무름으로는 다른 판을 밀어내지 않는다. 설정을 고르다 지나친 포인터에 판이 바뀌면 안 된다.
+                if (!hover->popup && panel_ == widget_panel::none)
+                    panel_ = widget_panel::actions;
+            }
+            else if (panel_ == widget_panel::actions && !actions_trigger_hover_ && !actions_popup_hover_)
+                actions_close_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds { 300 };
         }
         else if (const auto* placement { message.get<detail_placement_intent>() }; placement != nullptr)
         {
@@ -1778,11 +1888,20 @@ namespace session_board {
 
     std::optional<std::chrono::steady_clock::time_point> board_driver::next_tick()
     {
-        return next_tick_;
+        return actions_close_at_.has_value() ? std::min(next_tick_, *actions_close_at_) : next_tick_;
     }
 
     void board_driver::tick(const std::chrono::steady_clock::time_point now)
     {
+        if (actions_close_at_.has_value() && now >= *actions_close_at_)
+        {
+            actions_close_at_.reset();
+            if (panel_ == widget_panel::actions && !actions_trigger_hover_ && !actions_popup_hover_)
+                panel_ = widget_panel::none;
+        }
+        // 모은 단추를 닫으려고 일찍 깬 것이면 세션은 다시 읽지 않는다.
+        if (now < next_tick_)
+            return;
         if (changes_ == INVALID_HANDLE_VALUE || codex_ != nullptr || claude_ != nullptr || antigravity_ != nullptr)
             reload();
         else if (WaitForSingleObject(changes_, 0) == WAIT_OBJECT_0)
@@ -1822,10 +1941,14 @@ namespace session_board {
         frame->style = style_;
         // 세부 정보 팝업의 자리는 카드를 그린 tree가 배치 뒤에 채운다.
         preview_top_.reset();
+        actions_right_.reset();
         frame->tree = std::make_shared<const luil::ui_tree>(make_widget_tree(now));
-        if (collapsed_ && !updates_.pending().empty())
+        // 알림 판과 설정 판은 같은 자리에 선다. 사용자가 연 판이 앞선다.
+        if (collapsed_ && !updates_.pending().empty() && panel_ == widget_panel::none)
             make_update_popup(*frame, now);
         make_preview_popup(*frame, now);
+        make_settings_popup(*frame);
+        make_actions_popup(*frame);
         if (detail_open_)
         {
             // 위젯으로 지켜보다가 자세히 볼 때 여는 독립 창이다. 작업 표시줄에 따로 선다.
@@ -2177,22 +2300,44 @@ namespace session_board {
             { .length = 16.0f, .cross_length = 16.0f });
         caption->add_gap(4.0f);
         caption->add_flexible(label(u8"widget-title", u8"Session Board", 14.0f));
-        if (inner_width >= 340.0f)
-            caption->add_fit(label(u8"widget-count", u8"확인 " + u8(std::to_string(attention)) + u8" · 진행 " + u8(std::to_string(running)), 11.0f, luil::label_color_role::dim));
+        // 확인·진행·완료·새 알림을 아이콘과 수로 줄여 보인다. 새 알림은 접힌 동안 쌓인 알림이다.
+        const std::vector<header_count> counts {
+            { u8"widget-count-attention", u8"확인", luil::codicons::icon_warning, static_cast<std::size_t>(attention) },
+            { u8"widget-count-running", u8"진행", 0, static_cast<std::size_t>(running) },
+            { u8"widget-count-done", u8"완료", luil::codicons::icon_pass, static_cast<std::size_t>(std::ranges::count_if(visible, std::not_fn(active))) },
+            { u8"widget-count-alerts", u8"새 알림", luil::codicons::icon_bell_dot, updates_.pending().size() },
+        };
+        const float counts_width { header_counts_width(counts) };
+        caption->add(std::make_unique<header_status>(counts), counts_width);
         caption->add_gap(4.0f);
         const auto add_button = [&](std::unique_ptr<luil::button_element> button) {
             button->set_caption_client(true);
             caption->add(std::move(button), { .length = widget_icon_button, .cross_length = widget_icon_button });
         };
-        add_button(widget_button(
-            u8"widget-detail", detail_open_ ? u8"상세 화면 닫기" : u8"상세 화면 열기", luil::codicons::icon_editor_layout, luil::make_message_action(open_detail_intent {}), detail_open_));
-        add_button(widget_button(u8"widget-theme", u8"테마 · 키 컬러", luil::codicons::icon_color_mode, luil::make_message_action(theme_settings_intent {}), theme_settings_open_));
-        add_button(widget_button(u8"widget-backdrop", u8"배경 효과 · 진하기", luil::codicons::icon_symbol_color, luil::make_message_action(backdrop_settings_intent {}), backdrop_settings_open_));
-        add_button(widget_button(u8"widget-pin", pinned_ ? u8"항상 위에 표시 해제" : u8"항상 위에 표시", luil::codicons::icon_pin, command_action(toggle_pin_command), pinned_));
-        const bool points_down { collapsed_ != metrics_.header_bottom };
-        add_button(widget_button(u8"widget-collapse", collapsed_ ? u8"목록 펼치기" : u8"목록 접기", points_down ? luil::codicons::icon_chevron_down : luil::codicons::icon_chevron_up,
-            command_action(toggle_collapse_command)));
+        // 단추가 제목과 상태 표식을 밀어낼 만큼 좁으면 닫기만 남기고 하나로 모은다. 모은 단추는 머무르거나 누르면 펼친다.
+        auto actions { widget_actions() };
+        const float fixed_width { 12.0f + 8.0f + 16.0f + 4.0f + header_title_minimum + counts_width + 4.0f };
+        const auto header_width = [&](const std::size_t buttons) { return fixed_width + widget_icon_button * static_cast<float>(buttons) + header_spacing * static_cast<float>(buttons + 4); };
+        const luil::ui_element* actions_trigger { nullptr };
+        if (inner_width >= header_width(actions.size() + 1))
+            for (auto& button : actions)
+                add_button(std::move(button));
+        else
+        {
+            const bool open { panel_ == widget_panel::actions };
+            auto more { widget_button(u8"widget-more", u8"단추 더 보기", luil::codicons::icon_ellipsis, luil::make_message_action(widget_panel_intent { widget_panel::actions, !open }), open) };
+            more->set_hover_dwell(luil::hover_dwell_target {
+                .delay = std::chrono::milliseconds { 150 },
+                .on_dwell = luil::make_message_action(actions_hover_intent { .popup = false, .inside = true }),
+                .on_end = luil::make_message_action(actions_hover_intent { .popup = false, .inside = false }),
+            });
+            actions_trigger = more.get();
+            add_button(std::move(more));
+        }
         add_button(widget_button(u8"compact-close", u8"위젯 닫기", luil::codicons::icon_chrome_close, command_action(0)));
+        // 모은 단추를 펼친 채 머릿줄이 넓어지면 단추가 제자리로 돌아온다. 보이지 않는 팝업이 알림 판을 막지 않게 닫는다.
+        if (panel_ == widget_panel::actions && actions_trigger == nullptr)
+            panel_ = widget_panel::none;
         luil::panel_config caption_surface {};
         caption_surface.background = [](const luil::ui_color_palette& palette) { return palette.accent; };
         auto caption_panel { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"widget-caption" }, caption_surface) };
@@ -2207,83 +2352,7 @@ namespace session_board {
         {
             const luil::stack_config region_config { .spacing = widget_gap, .padding = luil::edge_insets::all(widget_gap) };
             auto region { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-region-body" }, region_config) };
-            float used { caption_height + 1.0f + widget_footer_height + 2.0f * widget_gap };
-            const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
-            if (theme_settings_open_)
-            {
-                // 밝기와 키 컬러다. 키 컬러는 앱 전체 외양이라 상세 창도 함께 바뀐다.
-                const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 10.0f } };
-                auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-theme-settings" }, settings_config) };
-                // 카드·견본 줄 수는 폭으로 정해지므로 실제로 받을 폭(목록 영역 여백·설정 여백·테두리를 뺀 값)으로 높이를 잰다.
-                const float picker_width { inner_width - 2.0f * widget_gap - 20.0f - 2.0f };
-                settings->add(label(u8"widget-theme-name", u8"테마", 11.0f, luil::label_color_role::dim), 16.0f);
-                luil::theme_picker_config themes {
-                    .owner = u8"theme-mode",
-                    .selected = theme_,
-                    .name = u8"테마",
-                    .accent_id = accent_id_,
-                    .card_width = widget_theme_card_width,
-                    .preview_height = widget_theme_preview_height,
-                    .gap = widget_theme_card_gap,
-                };
-                themes.select = [](const luil::theme_preference value) { return luil::make_app_action(theme_mode_intent { value }); };
-                const float themes_height { luil::theme_picker_element::height_for(themes, picker_width) };
-                settings->add(std::make_unique<luil::theme_picker_element>(std::move(themes)), themes_height);
-                settings->add_gap(4.0f);
-                settings->add(label(u8"widget-accent-name", u8"키 컬러", 11.0f, luil::label_color_role::dim), 16.0f);
-                luil::accent_picker_config accents { .owner = u8"widget-accent", .selected = accent_id_, .name = u8"키 컬러" };
-                accents.select = [](const std::u8string& id) { return luil::make_app_action(accent_intent { id }); };
-                const float picker_height { luil::accent_picker_element::height_for(accents, picker_width) };
-                settings->add(std::make_unique<luil::accent_picker_element>(std::move(accents)), picker_height);
-                const float settings_height { 16.0f + 16.0f + 4.0f + themes_height + 4.0f + 4.0f + 16.0f + 4.0f + picker_height };
-                region->add(panel(u8"widget-theme-surface", std::move(settings)), settings_height);
-                used += settings_height + widget_gap;
-            }
-            if (backdrop_settings_open_)
-            {
-                // 흐림과 진하기다. 팝업을 띄우지 않고 머릿줄 아래에 펼친다 — 위젯 창은 바탕이 투명하다.
-                const luil::stack_config settings_config { .spacing = 4.0f, .padding = { 10.0f, 6.0f, 10.0f, 6.0f } };
-                auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-settings" }, settings_config) };
-                // 투명·흐림을 한 판 위에서 고르는 선택 묶음이다.
-                //  - DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 선택도 앱 UI 명령으로 답한다.
-                //  - 100%에서는 비칠 자리가 없어 고를 일이 없다. 값은 남겨 두고 진하기를 내리면 다시 따른다.
-                const bool opaque { fully_opaque(opacity_) };
-                auto effect_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-backdrop-row" }, row_config) };
-                effect_row->add(label(u8"widget-backdrop-name", u8"배경", 11.0f, luil::label_color_role::dim), 40.0f);
-                luil::choice_group_config mode { .owner = u8"widget-backdrop-mode", .style = luil::choice_style::toggle, .name = u8"배경" };
-                mode.items.push_back({ u8"backdrop-transparent", u8"투명" });
-                mode.items.push_back({ u8"backdrop-blur", u8"흐림" });
-                mode.items.push_back({ u8"backdrop-acrylic", u8"Acrylic" });
-                mode.selected = backdrop_ == widget_backdrop::transparent ? u8"backdrop-transparent" : backdrop_ == widget_backdrop::blur ? u8"backdrop-blur" : u8"backdrop-acrylic";
-                mode.select = [](const std::u8string& value) {
-                    const std::uint32_t command { value == u8"backdrop-transparent" ? backdrop_transparent_command : value == u8"backdrop-blur" ? backdrop_blur_command : backdrop_acrylic_command };
-                    return luil::input_action { luil::app_ui_command { command } };
-                };
-                auto mode_element { std::make_unique<luil::choice_group_element>(std::move(mode)) };
-                mode_element->set_enabled(!opaque);
-                mode_element->set_tooltip(
-                    opaque ? u8"진하기가 100%라 뒤가 비치지 않습니다" : u8"투명은 뒤가 그대로 비치고, 흐림은 뒤를 흐리기만 하며, Acrylic은 흐린 뒤에 명암에 맞춘 색 막을 덧씌웁니다");
-                effect_row->add_fit(std::move(mode_element));
-                effect_row->add_flexible_gap();
-                settings->add(std::move(effect_row), widget_setting_row);
-                // 끌면 자석 지점에 붙고, Ctrl을 누른 채 끌면 붙지 않는다.
-                //  - 값은 위젯 창이 먼저 받는다. 100%를 넘나들 때 DWM 합성을 그 창의 thread에서 바꿔야 한다.
-                luil::slider_config level { .minimum = 0.0f, .maximum = 1.0f, .value = opacity_ };
-                level.change = [](const float delta) { return luil::input_action { luil::app_ui_command { opacity_change_command, number_text(delta) } }; };
-                level.change_to = [](const float value) { return luil::input_action { luil::app_ui_command { opacity_command, number_text(value) } }; };
-                level.magnets.assign(widget_opacity_magnets.begin(), widget_opacity_magnets.end());
-                auto slider { std::make_unique<luil::slider_element>(luil::ui_element_id { kind_button, u8"widget-opacity" }, std::move(level)) };
-                // 슬라이더는 보조 기술 이름을 tooltip에서만 읽는다.
-                slider->set_tooltip(u8"진하기");
-                auto level_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-opacity-row" }, row_config) };
-                level_row->add(label(u8"widget-opacity-name", u8"진하기", 11.0f, luil::label_color_role::dim), 40.0f);
-                level_row->add_flexible(std::move(slider));
-                level_row->add(label(u8"widget-opacity-value", u8(std::to_string(std::lround(opacity_ * 100.0f))) + u8"%", 11.0f, luil::label_color_role::dim, luil::text_align::end), 36.0f);
-                settings->add(std::move(level_row), widget_setting_row);
-                constexpr float settings_height { 12.0f + 2.0f * widget_setting_row + 4.0f };
-                region->add(panel(u8"widget-settings-surface", std::move(settings)), settings_height);
-                used += settings_height + widget_gap;
-            }
+            const float used { caption_height + 1.0f + widget_footer_height + 2.0f * widget_gap };
 
             // 목록 영역: 진하기만큼의 바탕만 깐다. 흐림·투명이면 그 뒤로 바탕 화면이 비친다.
             auto rows { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-rows" }, luil::stack_config { .spacing = widget_gap }) };
@@ -2408,6 +2477,8 @@ namespace session_board {
             scroll_ = scroll_metrics->metrics().scroll_offset;
         if (preview_card != nullptr)
             preview_top_ = preview_card->bounds().y / scale;
+        if (actions_trigger != nullptr)
+            actions_right_ = (actions_trigger->bounds().x + actions_trigger->bounds().width) / scale;
         root->add(std::move(content));
         if (!collapsed_)
         {
@@ -2641,6 +2712,162 @@ namespace session_board {
         popup.width = preview_width;
         popup.height = height;
         popup.backdrop = luil::window_backdrop::acrylic;
+        popup.tree = std::make_shared<const luil::ui_tree>(std::move(root));
+        frame.popups.push_back(std::move(popup));
+    }
+
+    std::vector<std::unique_ptr<luil::button_element>> board_driver::widget_actions() const
+    {
+        std::vector<std::unique_ptr<luil::button_element>> result {};
+        result.push_back(widget_button(
+            u8"widget-detail", detail_open_ ? u8"상세 화면 닫기" : u8"상세 화면 열기", luil::codicons::icon_editor_layout, luil::make_message_action(open_detail_intent {}), detail_open_));
+        const auto panel_button = [&](const std::u8string& id, const std::u8string& name, const char32_t glyph, const widget_panel panel) {
+            const bool open { panel_ == panel };
+            result.push_back(widget_button(id, name, glyph, luil::make_message_action(widget_panel_intent { panel, !open }), open));
+        };
+        panel_button(u8"widget-theme", u8"테마 · 키 컬러", luil::codicons::icon_color_mode, widget_panel::theme);
+        panel_button(u8"widget-backdrop", u8"배경 효과 · 진하기", luil::codicons::icon_symbol_color, widget_panel::backdrop);
+        result.push_back(widget_button(u8"widget-pin", pinned_ ? u8"항상 위에 표시 해제" : u8"항상 위에 표시", luil::codicons::icon_pin, command_action(toggle_pin_command), pinned_));
+        const bool points_down { collapsed_ != metrics_.header_bottom };
+        result.push_back(widget_button(u8"widget-collapse", collapsed_ ? u8"목록 펼치기" : u8"목록 접기", points_down ? luil::codicons::icon_chevron_down : luil::codicons::icon_chevron_up,
+            command_action(toggle_collapse_command)));
+        return result;
+    }
+
+    void board_driver::make_settings_popup(luil::ui_frame& frame)
+    {
+        if (panel_ != widget_panel::theme && panel_ != widget_panel::backdrop)
+            return;
+        const float scale { metrics_.scale > 0.0f ? metrics_.scale : 1.0f };
+        const float width { metrics_.width / scale };
+        if (width <= 0.0f)
+            return;
+        constexpr float inset { 10.0f };
+        const luil::stack_config settings_config { .spacing = 4.0f, .padding = luil::edge_insets::all(inset) };
+        auto settings { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-settings" }, settings_config) };
+        float height { 2.0f * inset };
+        if (panel_ == widget_panel::theme)
+        {
+            // 밝기와 키 컬러다. 키 컬러는 앱 전체 외양이라 상세 창도 함께 바뀐다.
+            // 카드·견본 줄 수는 폭으로 정해지므로 실제로 받을 폭(판 여백과 팝업 테두리를 뺀 값)으로 높이를 잰다.
+            const float picker_width { width - 2.0f * inset - 2.0f };
+            settings->add(label(u8"widget-theme-name", u8"테마", 11.0f, luil::label_color_role::dim), 16.0f);
+            luil::theme_picker_config themes {
+                .owner = u8"theme-mode",
+                .selected = theme_,
+                .name = u8"테마",
+                .accent_id = accent_id_,
+                .card_width = widget_theme_card_width,
+                .preview_height = widget_theme_preview_height,
+                .gap = widget_theme_card_gap,
+            };
+            themes.select = [](const luil::theme_preference value) { return luil::make_app_action(theme_mode_intent { value }); };
+            const float themes_height { luil::theme_picker_element::height_for(themes, picker_width) };
+            settings->add(std::make_unique<luil::theme_picker_element>(std::move(themes)), themes_height);
+            settings->add_gap(4.0f);
+            settings->add(label(u8"widget-accent-name", u8"키 컬러", 11.0f, luil::label_color_role::dim), 16.0f);
+            luil::accent_picker_config accents { .owner = u8"widget-accent", .selected = accent_id_, .name = u8"키 컬러" };
+            accents.select = [](const std::u8string& id) { return luil::make_app_action(accent_intent { id }); };
+            const float picker_height { luil::accent_picker_element::height_for(accents, picker_width) };
+            settings->add(std::make_unique<luil::accent_picker_element>(std::move(accents)), picker_height);
+            height += 16.0f + 4.0f + themes_height + 4.0f + 4.0f + 4.0f + 16.0f + 4.0f + picker_height;
+        }
+        else
+        {
+            // 흐림과 진하기다.
+            const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
+            // 투명·흐림을 한 판 위에서 고르는 선택 묶음이다.
+            //  - DWM 합성은 창을 가진 UI thread에서 바꿔야 하므로 선택도 앱 UI 명령으로 답한다.
+            //  - 100%에서는 비칠 자리가 없어 고를 일이 없다. 값은 남겨 두고 진하기를 내리면 다시 따른다.
+            const bool opaque { fully_opaque(opacity_) };
+            auto effect_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-backdrop-row" }, row_config) };
+            effect_row->add(label(u8"widget-backdrop-name", u8"배경", 11.0f, luil::label_color_role::dim), 40.0f);
+            luil::choice_group_config mode { .owner = u8"widget-backdrop-mode", .style = luil::choice_style::toggle, .name = u8"배경" };
+            mode.items.push_back({ u8"backdrop-transparent", u8"투명" });
+            mode.items.push_back({ u8"backdrop-blur", u8"흐림" });
+            mode.items.push_back({ u8"backdrop-acrylic", u8"Acrylic" });
+            mode.selected = backdrop_ == widget_backdrop::transparent ? u8"backdrop-transparent" : backdrop_ == widget_backdrop::blur ? u8"backdrop-blur" : u8"backdrop-acrylic";
+            mode.select = [](const std::u8string& value) {
+                const std::uint32_t command { value == u8"backdrop-transparent" ? backdrop_transparent_command : value == u8"backdrop-blur" ? backdrop_blur_command : backdrop_acrylic_command };
+                return luil::input_action { luil::app_ui_command { command } };
+            };
+            auto mode_element { std::make_unique<luil::choice_group_element>(std::move(mode)) };
+            mode_element->set_enabled(!opaque);
+            mode_element->set_tooltip(
+                opaque ? u8"진하기가 100%라 뒤가 비치지 않습니다" : u8"투명은 뒤가 그대로 비치고, 흐림은 뒤를 흐리기만 하며, Acrylic은 흐린 뒤에 명암에 맞춘 색 막을 덧씌웁니다");
+            effect_row->add_fit(std::move(mode_element));
+            effect_row->add_flexible_gap();
+            settings->add(std::move(effect_row), widget_setting_row);
+            // 끌면 자석 지점에 붙고, Ctrl을 누른 채 끌면 붙지 않는다.
+            //  - 값은 위젯 창이 먼저 받는다. 100%를 넘나들 때 DWM 합성을 그 창의 thread에서 바꿔야 한다.
+            luil::slider_config level { .minimum = 0.0f, .maximum = 1.0f, .value = opacity_ };
+            level.change = [](const float delta) { return luil::input_action { luil::app_ui_command { opacity_change_command, number_text(delta) } }; };
+            level.change_to = [](const float value) { return luil::input_action { luil::app_ui_command { opacity_command, number_text(value) } }; };
+            level.magnets.assign(widget_opacity_magnets.begin(), widget_opacity_magnets.end());
+            auto slider { std::make_unique<luil::slider_element>(luil::ui_element_id { kind_button, u8"widget-opacity" }, std::move(level)) };
+            // 슬라이더는 보조 기술 이름을 tooltip에서만 읽는다.
+            slider->set_tooltip(u8"진하기");
+            auto level_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-opacity-row" }, row_config) };
+            level_row->add(label(u8"widget-opacity-name", u8"진하기", 11.0f, luil::label_color_role::dim), 40.0f);
+            level_row->add_flexible(std::move(slider));
+            level_row->add(label(u8"widget-opacity-value", u8(std::to_string(std::lround(opacity_ * 100.0f))) + u8"%", 11.0f, luil::label_color_role::dim, luil::text_align::end), 36.0f);
+            settings->add(std::move(level_row), widget_setting_row);
+            height += 2.0f * widget_setting_row + 4.0f;
+        }
+
+        auto background { std::make_unique<popup_backing>(u8"settings-background", std::move(settings)) };
+        auto root { std::make_unique<luil::root_element>() };
+        root->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
+        background->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
+        root->add(std::move(background));
+        // 머릿줄 바깥쪽이 아니라 목록 쪽으로 붙인다. 접혀 있으면 창 밖으로 나가고, 화면 끝에 닿으면 luil이 작업 영역 안으로 들인다.
+        const float window_height { metrics_.height / scale };
+        constexpr float caption_height { static_cast<float>(widget_caption_height) };
+        luil::ui_popup popup {};
+        popup.id = u8"widget-settings-panel";
+        popup.y = metrics_.header_bottom ? window_height - caption_height - widget_panel_gap - height : caption_height + widget_panel_gap;
+        popup.width = width;
+        popup.height = height;
+        popup.backdrop = luil::window_backdrop::acrylic;
+        popup.dismiss = close_panel(panel_);
+        popup.tree = std::make_shared<const luil::ui_tree>(std::move(root));
+        frame.popups.push_back(std::move(popup));
+    }
+
+    void board_driver::make_actions_popup(luil::ui_frame& frame)
+    {
+        if (panel_ != widget_panel::actions || !actions_right_.has_value())
+            return;
+        const float scale { metrics_.scale > 0.0f ? metrics_.scale : 1.0f };
+        auto actions { widget_actions() };
+        const float count { static_cast<float>(actions.size()) };
+        const float width { 2.0f * widget_actions_inset + widget_icon_button * count + header_spacing * (count - 1.0f) };
+        const float height { 2.0f * widget_actions_inset + widget_icon_button };
+        const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = header_spacing, .padding = luil::edge_insets::all(widget_actions_inset) };
+        auto row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-actions-row" }, row_config) };
+        for (auto& button : actions)
+            row->add(std::move(button), { .length = widget_icon_button, .cross_length = widget_icon_button });
+        auto background { std::make_unique<popup_backing>(u8"actions-background", std::move(row)) };
+        // 표지 단추에서 이 팝업으로 옮겨 오는 동안 닫히지 않게 한다. 떠나면 잠시 뒤 닫는다.
+        background->set_hover_region(luil::hover_region_target {
+            .on_enter = [] { return luil::make_app_action(actions_hover_intent { .popup = true, .inside = true }); },
+            .on_leave = [] { return luil::make_app_action(actions_hover_intent { .popup = true, .inside = false }); },
+        });
+        auto root { std::make_unique<luil::root_element>() };
+        root->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
+        background->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
+        root->add(std::move(background));
+        // 표지 단추와 오른쪽 끝을 맞춰 바로 아래(머릿줄이 바닥이면 바로 위)에 띄운다. 단추를 덮으면 머무름이 끝나 닫힌다.
+        const float window_height { metrics_.height / scale };
+        constexpr float caption_height { static_cast<float>(widget_caption_height) };
+        luil::ui_popup popup {};
+        popup.id = u8"widget-actions";
+        popup.x = std::max(0.0f, *actions_right_ - width);
+        popup.y = metrics_.header_bottom ? window_height - caption_height - widget_actions_gap - height : caption_height + widget_actions_gap;
+        popup.width = width;
+        popup.height = height;
+        popup.backdrop = luil::window_backdrop::acrylic;
+        popup.dismiss = close_panel(widget_panel::actions);
         popup.tree = std::make_shared<const luil::ui_tree>(std::move(root));
         frame.popups.push_back(std::move(popup));
     }

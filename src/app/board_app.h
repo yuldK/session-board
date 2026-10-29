@@ -81,9 +81,29 @@ namespace session_board {
     {
         std::u8string id {};
     };
-    // 위젯 머릿줄 아래의 테마 설정 줄을 펼치거나 접는다.
-    struct theme_settings_intent
-    {};
+    // 위젯 머릿줄에서 여는 팝업 판이다. 한 번에 하나만 뜬다.
+    enum class widget_panel
+    {
+        none,
+        // 테마와 키 컬러다.
+        theme,
+        // 배경 효과와 진하기다.
+        backdrop,
+        // 머릿줄이 좁아 모은 단추들이다.
+        actions,
+    };
+    // 판을 열거나 닫는다. 바깥 누름의 닫힘과 그 판을 연 단추의 누름이 함께 와도 결과가 같도록 뒤집지 않고 값을 정한다.
+    struct widget_panel_intent
+    {
+        widget_panel panel { widget_panel::none };
+        bool open { false };
+    };
+    // 모은 단추의 표지 단추(`popup`이 거짓)나 그 팝업(`popup`이 참)에 포인터가 들거나 났다.
+    struct actions_hover_intent
+    {
+        bool popup { false };
+        bool inside { false };
+    };
     struct widget_failed_intent
     {};
     struct scroll_intent
@@ -135,8 +155,6 @@ namespace session_board {
     {
         float value { widget_default_opacity };
     };
-    struct backdrop_settings_intent
-    {};
     // 그 세션이 열린 Claude Code·Codex 창을 앞으로 가져온다.
     struct focus_session_intent
     {
@@ -220,6 +238,12 @@ namespace session_board {
         void make_update_popup(luil::ui_frame& frame, std::int64_t now);
         // 머무른 카드 옆의 세부 정보 팝업이다. 위젯을 덮지 않는 쪽에 자리가 없으면 띄우지 않는다.
         void make_preview_popup(luil::ui_frame& frame, std::int64_t now);
+        // 테마·배경 설정 판이다. 목록을 접어 둔 채로도 고를 수 있게 머릿줄 아래(머릿줄이 바닥이면 위)에 띄운다.
+        void make_settings_popup(luil::ui_frame& frame);
+        // 좁은 머릿줄에서 모은 단추를 표지 단추 아래에 띄운다.
+        void make_actions_popup(luil::ui_frame& frame);
+        // 머릿줄의 단추들이다. 넓으면 머릿줄에, 좁으면 모은 단추 팝업에 선다.
+        [[nodiscard]] std::vector<std::unique_ptr<luil::button_element>> widget_actions() const;
         // 상세 창의 tree다. 보조 창 client의 (0,0)에서 시작한다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_detail_tree(std::int64_t now);
         // 상세 창 본문 자리의 라이선스 화면이다. 왼쪽은 구성 요소, 오른쪽은 고른 것의 원문이다.
@@ -262,8 +286,14 @@ namespace session_board {
         bool detail_open_ { false };
         bool collapsed_ { false };
         bool pinned_ { true };
-        bool backdrop_settings_open_ { false };
-        bool theme_settings_open_ { false };
+        widget_panel panel_ { widget_panel::none };
+        // 모은 단추의 표지 단추와 팝업 위에 포인터가 있는가다. 둘 다 떠나면 잠시 뒤 팝업을 닫는다.
+        //  - 표지 단추에서 팝업으로 옮기는 사이 잠깐 둘 다 떠난 것으로 보이므로 곧바로 닫지 않는다.
+        bool actions_trigger_hover_ { false };
+        bool actions_popup_hover_ { false };
+        std::optional<std::chrono::steady_clock::time_point> actions_close_at_ {};
+        // 표지 단추 오른쪽 끝의 창 안 자리(논리 픽셀)다. 머릿줄을 그린 tree가 배치 뒤에 채운다. 단추를 모으지 않았으면 비어 있다.
+        std::optional<float> actions_right_ {};
         std::u8string accent_id_ { luil::default_accent_id };
         widget_backdrop backdrop_ { widget_backdrop::acrylic };
         float opacity_ { widget_default_opacity };
