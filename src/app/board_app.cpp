@@ -860,6 +860,29 @@ namespace session_board {
             return {};
         }
 
+        // 작업 중 표시의 크기다. 회전 글리프는 점보다 획이 가늘어 조금 크게 둔다.
+        constexpr float running_mark_size { 11.0f };
+
+        // 상태 점이다. 작업 중이면 도는 표시로 진행 중임을 보이고, 끝난 일은 속이 빈 점이다.
+        //  - 점의 모양만으로도 진행·완료·종료가 갈린다. 움직임 줄이기를 켜면 회전 표시는 멈춘 글리프로 선다.
+        std::unique_ptr<luil::ui_element> status_mark(const std::u8string& id, const bool running, const bool closed, const float size)
+        {
+            if (running)
+            {
+                auto spinner { std::make_unique<luil::spinner_element>(luil::ui_element_id { kind_layout, id + u8"-dot" }, luil::spinner_config { .name = u8"작업 중", .size = running_mark_size }) };
+                spinner->set_hit_opaque(false);
+                return spinner;
+            }
+            luil::panel_config dot_config {};
+            dot_config.background = [closed](const luil::ui_color_palette& palette) { return closed ? luil::with_alpha(palette.surface_background, 0.0f) : palette.secondary_foreground; };
+            dot_config.corner_radius = size / 2.0f;
+            if (closed)
+                dot_config.border = [](const luil::ui_color_palette& palette) { return palette.secondary_foreground; };
+            auto dot { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, id + u8"-dot" }, dot_config) };
+            dot->set_hit_opaque(false);
+            return dot;
+        }
+
         // 상태 칸이다. 경고·오류는 글리프가 붙는 배지로, 그 밖은 점과 글로 말한다.
         // 중립 배지는 notice 바탕이라 붉게 읽히므로 평상 상태에는 쓰지 않는다.
         std::unique_ptr<luil::ui_element> status_view(const std::u8string& id, const std::u8string& text, const bool attention, const bool error, const bool running, const bool closed)
@@ -875,19 +898,7 @@ namespace session_board {
                 cell->add_flexible_gap();
                 return cell;
             }
-            // 끝난 세션은 속이 빈 점이다. 점의 모양만으로도 진행·완료·종료가 갈린다.
-            luil::panel_config dot_config {};
-            dot_config.background = [running, closed](const luil::ui_color_palette& palette) {
-                if (closed)
-                    return luil::with_alpha(palette.surface_background, 0.0f);
-                return running ? palette.accent : palette.secondary_foreground;
-            };
-            dot_config.corner_radius = 4.0f;
-            if (closed)
-                dot_config.border = [](const luil::ui_color_palette& palette) { return palette.secondary_foreground; };
-            auto dot { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, id + u8"-dot" }, dot_config) };
-            dot->set_hit_opaque(false);
-            cell->add(std::move(dot), { .length = 8.0f, .cross_length = 8.0f });
+            cell->add(status_mark(id, running, closed, 8.0f), { .length = running ? running_mark_size : 8.0f, .cross_length = running ? running_mark_size : 8.0f });
             cell->add_flexible(label(id, text, 11.0f, running ? luil::label_color_role::primary : luil::label_color_role::dim));
             return cell;
         }
@@ -1241,15 +1252,20 @@ namespace session_board {
             auto line { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id }, config) };
             const bool attention { child_needs_attention(child, now) };
             const bool working { is_working(child.status) };
-            // 끝난 하위는 속이 빈 점이다. 부모 카드의 상태 점과 같은 말을 쓴다.
-            luil::panel_config dot_config {};
-            dot_config.background = [working](const luil::ui_color_palette& palette) { return working ? palette.accent : luil::with_alpha(palette.surface_background, 0.0f); };
-            dot_config.corner_radius = 3.5f;
-            if (!working)
-                dot_config.border = [](const luil::ui_color_palette& palette) { return palette.secondary_foreground; };
-            auto dot { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, id + u8"-dot" }, dot_config) };
-            dot->set_hit_opaque(false);
-            line->add(std::move(dot), { .length = 7.0f, .cross_length = 7.0f });
+            // 도는 하위는 회전 표시, 끝난 하위는 속이 빈 점이다. 부모 카드의 상태 점과 같은 말을 쓴다.
+            if (child.status == session_status::running)
+                line->add(status_mark(id, true, false, 7.0f), { .length = running_mark_size, .cross_length = running_mark_size });
+            else
+            {
+                luil::panel_config dot_config {};
+                dot_config.background = [working](const luil::ui_color_palette& palette) { return working ? palette.accent : luil::with_alpha(palette.surface_background, 0.0f); };
+                dot_config.corner_radius = 3.5f;
+                if (!working)
+                    dot_config.border = [](const luil::ui_color_palette& palette) { return palette.secondary_foreground; };
+                auto dot { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, id + u8"-dot" }, dot_config) };
+                dot->set_hit_opaque(false);
+                line->add(std::move(dot), { .length = 7.0f, .cross_length = 7.0f });
+            }
             // 백그라운드는 부모 응답이 끝난 뒤에도 남는 일이라 강조 글자색으로 가른다.
             auto kind { label(id + u8"-kind", child_kind_text(child), 11.0f, child.background ? luil::label_color_role::primary : luil::label_color_role::dim) };
             if (child.background)
@@ -2069,7 +2085,7 @@ namespace session_board {
             if (is_widget_visible(session, now))
                 visible.push_back(&session);
         // 응답이 끝났어도 하위가 돌면 진행 중 묶음에 둔다.
-        const auto active { [](const session_snapshot* session) { return (!session->turn_closed && session->status != session_status::ended) || working_children(*session) > 0; } };
+        const auto active { [](const session_snapshot* session) { return is_working(session->status) || working_children(*session) > 0; } };
         std::ranges::stable_sort(visible, [&](const auto* left, const auto* right) { return active(left) > active(right); });
         const auto attention { std::ranges::count_if(visible, [now](const auto* session) { return group_of(*session, now) == session_group::attention; }) };
         const auto running { std::ranges::count_if(visible, [now](const auto* session) { return group_of(*session, now) == session_group::running; }) };

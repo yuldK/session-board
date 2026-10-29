@@ -365,7 +365,9 @@ namespace session_board {
         }
         else if (event.event == "session_started")
         {
-            if (snapshot.status == session_status::ended || snapshot.status == session_status::interrupted || snapshot.status == session_status::failed)
+            // 세션을 열기만 해도 재개 Hook이 온다. 열기 전에 끝난 응답을 이번에 처리한 것처럼 `응답 완료`로 남기지 않는다.
+            //  - 작업 중의 compact는 진행 중인 turn을 그대로 둔다.
+            if (!is_working(snapshot.status))
             {
                 snapshot.status = session_status::idle;
                 snapshot.turn_closed = false;

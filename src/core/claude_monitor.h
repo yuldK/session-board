@@ -79,6 +79,8 @@ namespace session_board {
         std::string waiting_for {};
         std::string version {};
         std::string domain {};
+        // 이 프로세스가 세션을 연 시각이다. 그보다 앞서 끝난 응답은 이번에 처리한 것이 아니다. 모르면 0이다.
+        std::int64_t started_ms { 0 };
         std::int64_t updated_ms { 0 };
     };
 

@@ -64,6 +64,16 @@ namespace session_board {
             require(!apply_event(snapshot, event("tool_started")), "Ended session reactivated.");
             require(apply_event(snapshot, event("session_started")), "Resume rejected.");
             require(snapshot.status == session_status::idle && !snapshot.turn_closed, "Resume failed.");
+
+            // 끝난 응답이 있는 세션을 다시 열면 새 요청을 기다리는 세션이다. 지난 응답을 응답 완료로 남기지 않는다.
+            session_snapshot answered {};
+            require(apply_event(answered, event("turn_started")) && apply_event(answered, event("turn_finished")), "Answered turn rejected.");
+            require(apply_event(answered, event("session_started")), "Reopen rejected.");
+            require(answered.status == session_status::idle && !answered.turn_closed, "Reopened session shown as answered.");
+            // 작업 중의 compact는 진행 중인 turn을 그대로 둔다.
+            session_snapshot compacting {};
+            require(apply_event(compacting, event("turn_started")) && apply_event(compacting, event("session_started")), "Compact rejected.");
+            require(compacting.status == session_status::running && !compacting.turn_closed, "Compact reset a running turn.");
         }
 
         void failures_and_long_tools()

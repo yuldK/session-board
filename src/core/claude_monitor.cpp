@@ -711,6 +711,7 @@ namespace session_board {
         result.waiting_for = text_field(input, "waitingFor", 64);
         result.version = text_field(input, "version", 32);
         result.domain = text_field(input, "pidDomain", 128);
+        result.started_ms = number_field(input, "startedAt");
         result.updated_ms = std::max(number_field(input, "updatedAt"), number_field(input, "statusUpdatedAt"));
         return result;
     }
@@ -799,6 +800,8 @@ namespace session_board {
             snapshot.name = runtime.name;
         snapshot.observation_source = "claude-local";
         snapshot.runtime_loaded = true;
+        // 기록의 마지막 소식이 세션을 연 시각보다 이르면 열어 보기만 한 세션이다. 그 뒤로 처리한 요청이 없다.
+        const bool opened_only { (snapshot.turn_id.empty() && snapshot.summary.empty()) || snapshot.updated_ms < runtime.started_ms };
         const bool current_status { runtime.updated_ms >= snapshot.updated_ms };
         snapshot.updated_ms = std::max(snapshot.updated_ms, runtime.updated_ms);
         if (!current_status)
@@ -814,12 +817,24 @@ namespace session_board {
         }
         else if (runtime.status == "idle")
         {
-            if (snapshot.status != session_status::interrupted)
+            // 열기 전의 응답·중단·오류는 지난 일이다. 재개 Hook과 같이 새 요청을 기다리는 세션으로 보인다.
+            if (opened_only)
             {
                 snapshot.status = session_status::idle;
-                snapshot.activity = snapshot.turn_id.empty() && snapshot.summary.empty() ? "다음 요청 대기" : "응답 완료";
+                snapshot.turn_closed = false;
+                snapshot.failure.clear();
+                snapshot.activity = "다음 요청 대기";
+                snapshot.last_event = "session_started";
             }
-            snapshot.turn_closed = true;
+            else
+            {
+                if (snapshot.status != session_status::interrupted)
+                {
+                    snapshot.status = session_status::idle;
+                    snapshot.activity = "응답 완료";
+                }
+                snapshot.turn_closed = true;
+            }
             snapshot.active_tools.clear();
             snapshot.tool_name.clear();
         }
@@ -968,7 +983,7 @@ namespace session_board {
                         // 위젯 유지 기간이 지난 끝난 하위는 부모 카드에서도 뺀다. 에이전트와 명령이 같은 기준을 쓴다.
                         std::erase_if(session.children, [time](const auto& child) { return !is_working(child.status) && time - child.updated_ms >= widget_retention_ms; });
                         // 포그라운드 하위는 부모 turn 안에서 끝난다. 끝 표시 없이 남은 하위는 매 주기 메타로 다시 만들어지므로 늦게 온 끝 표시가 이긴다.
-                        if (session.turn_closed)
+                        if (!is_working(session.status))
                             close_children(session, session.status == session_status::interrupted ? session_status::interrupted : session_status::ended, time, true);
                         // 닫힌 세션의 하위는 더 이상 소식을 남기지 못한다. 진행 중으로 남겨 두지 않는다.
                         if (!session.runtime_loaded)

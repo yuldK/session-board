@@ -282,7 +282,39 @@ namespace session_board {
             idle.status = "idle";
             idle.updated_ms = resumed.updated_ms + 1;
             apply_claude_runtime(snapshot, idle);
-            require(snapshot.status == session_status::idle && snapshot.turn_closed && snapshot.runtime_loaded, "Idle open session not kept.");
+            // 요청을 받은 적 없는 세션이라 응답 완료가 아니라 다음 요청 대기다.
+            require(snapshot.status == session_status::idle && !snapshot.turn_closed && snapshot.runtime_loaded, "Idle open session not kept.");
+
+            // 열기 전에 끝난 응답은 이번에 처리한 것이 아니다. 연 뒤에 끝난 응답만 응답 완료다.
+            auto opened { base };
+            opened["status"] = "idle";
+            opened["startedAt"] = 5000;
+            opened["updatedAt"] = 5500;
+            const auto opened_runtime { parse_claude_runtime(opened) };
+            require(opened_runtime.has_value() && opened_runtime->started_ms == 5000, "Registry start time not parsed.");
+            session_snapshot earlier {};
+            earlier.provider = "claude";
+            earlier.session_id = session_id;
+            earlier.turn_id = "prompt-1";
+            earlier.summary = "지난 답변";
+            earlier.status = session_status::idle;
+            earlier.turn_closed = true;
+            earlier.last_event = "turn_finished";
+            earlier.updated_ms = 3000;
+            auto viewed { earlier };
+            apply_claude_runtime(viewed, *opened_runtime);
+            require(viewed.status == session_status::idle && !viewed.turn_closed && viewed.activity == "다음 요청 대기" && viewed.summary == "지난 답변", "Opened session shown as answered.");
+            auto stopped { earlier };
+            stopped.status = session_status::interrupted;
+            apply_claude_runtime(stopped, *opened_runtime);
+            require(stopped.status == session_status::idle && !stopped.turn_closed, "Interruption before opening kept.");
+            auto answered { earlier };
+            answered.updated_ms = 5200;
+            apply_claude_runtime(answered, *opened_runtime);
+            require(answered.status == session_status::idle && answered.turn_closed && answered.activity == "응답 완료", "Answer after opening not shown.");
+            session_snapshot unused {};
+            apply_claude_runtime(unused, *opened_runtime);
+            require(unused.status == session_status::idle && !unused.turn_closed && unused.activity == "다음 요청 대기", "Registry-only session shown as answered.");
         }
 
         void merging()
