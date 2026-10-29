@@ -66,6 +66,8 @@ namespace session_board {
         // 마지막으로 맞춘 창 사각형이다. luil이 크기 변경을 새 frame과 함께 내려고 미루는 동안에도 그 목표 자리다.
         [[nodiscard]] RECT bounds() const noexcept;
         [[nodiscard]] int notification_room() const noexcept;
+        // 창 왼쪽·오른쪽으로 작업 영역 끝까지 남은 폭(물리 픽셀)이다. 세부 정보 팝업을 띄울 쪽을 고른다.
+        [[nodiscard]] int side_room(bool left) const noexcept;
         // 접기 전 높이(물리 픽셀)다. 접힌 채 닫아도 다음 실행은 펼친 크기로 연다.
         [[nodiscard]] int expanded_height() const noexcept;
         [[nodiscard]] bool pinned() const noexcept;

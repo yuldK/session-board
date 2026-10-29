@@ -206,6 +206,13 @@ try {
     $null = Step "Wait-LuilElement -id 'compact-$codex_owner' -absent"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')"
     $null = Step "Wait-LuilElement -id 'compact-$codex_owner'"
+    # 완료 목록 정리는 끝난 세션을 위젯에서 뺀다. 새 소식이 오면 다시 나타난다.
+    $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-clear-completed')"
+    $null = Step "Wait-LuilElement -id 'compact-$codex_owner' -absent"
+    Send-Codex 'UserPromptSubmit' '정리 뒤 새 요청'
+    $null = Step "Wait-LuilElement -id 'compact-$codex_owner'"
+    Send-Codex 'Stop'
+    $null = Step "Wait-LuilElement -id '$codex_owner-status' -name '응답 완료' -all_surfaces"
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-pin')"
     $null = Step "Wait-LuilElement -id 'widget-pin' -name '항상 위에 표시'"
     Assert-WidgetWindow -topmost $false
@@ -243,7 +250,7 @@ while ($true) {
     # 위젯의 상세 화면 단추는 상세 창을 닫기도 한다.
     $null = Step "Invoke-LuilElement (Wait-LuilElement -id 'widget-detail')"
     $null = Step "Wait-LuilElement -id 'filter-all' -all_surfaces -absent"
-    Write-Output 'UI smoke passed (isolated desktop): widget-first start, detail window, open source licenses, live updates, filters, themes, accent, opacity range, backdrop, end retention, expand/collapse, pin, resize grip, focus button state and scroll.'
+    Write-Output 'UI smoke passed (isolated desktop): widget-first start, detail window, open source licenses, live updates, filters, themes, accent, opacity range, backdrop, end retention, expand/collapse, completed clear, pin, resize grip, focus button state and scroll.'
     Get-ChildItem -LiteralPath $data_directory -Filter '*.png' | ForEach-Object FullName
 }
 finally {

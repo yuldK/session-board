@@ -19,6 +19,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <map>
 #include <memory>
 #include <optional>
 
@@ -30,6 +31,9 @@ namespace session_board {
         float scale { 1.0f };
         bool header_bottom { false };
         float notification_room { 0.0f };
+        // 창 왼쪽·오른쪽으로 남은 작업 영역 폭(물리 픽셀)이다. 세부 정보 팝업이 위젯을 덮지 않는 쪽을 고른다.
+        float room_left { 0.0f };
+        float room_right { 0.0f };
         // 접힘 상태는 크기와 한 메시지로 온다. luil은 이 크기를 처리한 첫 tree로 창 크기를 바꾸므로 그 tree가 새
         // 상태도 담아야 한다.
         bool collapsed { false };
@@ -43,6 +47,22 @@ namespace session_board {
         std::string provider {};
         std::string session_id {};
         std::uint64_t sequence { 0 };
+    };
+    // 응답을 기다리지 않는 알림을 모두 숨긴다.
+    struct acknowledge_all_intent
+    {};
+    // 위젯의 최근 완료·종료 묶음을 비운다. 새 소식이 오면 그 세션은 다시 보인다.
+    struct clear_completed_intent
+    {};
+    // 카드 위에 머무르면 옆에 세부 정보를 띄우고, 떠나면 닫는다.
+    struct preview_intent
+    {
+        // 카드 element id다. 늦게 온 떠남이 다른 카드의 팝업을 닫지 않게 가른다.
+        std::u8string owner {};
+        std::u8string key {};
+        // 카드가 놓인 표면이다. 비어 있으면 위젯 창, 아니면 접힌 알림 팝업이다.
+        std::u8string surface {};
+        bool open { false };
     };
     struct provider_intent
     {
@@ -198,6 +218,8 @@ namespace session_board {
         // 주 창(위젯)의 tree다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_widget_tree(std::int64_t now);
         void make_update_popup(luil::ui_frame& frame, std::int64_t now);
+        // 머무른 카드 옆의 세부 정보 팝업이다. 위젯을 덮지 않는 쪽에 자리가 없으면 띄우지 않는다.
+        void make_preview_popup(luil::ui_frame& frame, std::int64_t now);
         // 상세 창의 tree다. 보조 창 client의 (0,0)에서 시작한다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_detail_tree(std::int64_t now);
         // 상세 창 본문 자리의 라이선스 화면이다. 왼쪽은 구성 요소, 오른쪽은 고른 것의 원문이다.
@@ -262,6 +284,12 @@ namespace session_board {
         std::shared_ptr<const std::vector<luil::virtual_list_item>> license_lines_ {};
         std::size_t license_lines_index_ { 0 };
         std::size_t license_lines_columns_ { 0 };
+        // 세부 정보를 띄운 카드다. 비어 있으면 팝업이 없다.
+        preview_intent preview_ {};
+        // 그 카드 윗변의 표면 안 자리(논리 픽셀)다. 카드를 그린 tree가 배치 뒤에 채운다. 화면에 없으면 비어 있다.
+        std::optional<float> preview_top_ {};
+        // 정리한 세션과 그때의 마지막 소식이다. 이보다 새 소식이 오면 다시 보인다.
+        std::map<std::u8string, std::int64_t> cleared_ {};
         std::u8string expanded_session_ {};
         std::u8string selected_session_ {};
         float scroll_ { 0.0f };

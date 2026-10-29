@@ -234,6 +234,15 @@ namespace session_board {
         return std::max(0L, header_bottom_ ? box.top - monitor.rcWork.top : monitor.rcWork.bottom - box.bottom);
     }
 
+    int widget_window::side_room(const bool left) const noexcept
+    {
+        const RECT box { bounds_ };
+        MONITORINFO monitor { .cbSize = sizeof(monitor) };
+        if (!GetMonitorInfoW(MonitorFromRect(&box, MONITOR_DEFAULTTONEAREST), &monitor))
+            return 0;
+        return std::max(0L, left ? box.left - monitor.rcWork.left : monitor.rcWork.right - box.right);
+    }
+
     int widget_window::expanded_height() const noexcept
     {
         return expanded_height_;
