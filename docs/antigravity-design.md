@@ -152,7 +152,7 @@ title:"…"  last_user_view_time:{seconds:1791293767  nanos:56000000}
 | 위 줄의 도구 중 `ask_question` | 입력 대기 | `사용자 답변 대기` |
 | `GENERIC` `DONE`/`ERROR` | 도구 하나 끝. 남은 도구가 없으면 | `분석 또는 응답 작성 중` |
 | `GENERIC` `RUNNING` + 백그라운드 문구 | 포그라운드 도구 끝, 하위 행 열기 | — |
-| `PLANNER_RESPONSE` 도구 없음 `DONE` | 응답 완료(`idle`), `turn_closed` | `응답 완료` |
+| `PLANNER_RESPONSE` 도구 없음 `DONE` | 응답 완료(`idle`), `turn_closed`. 마지막 공개 답이 물음표로 끝나면 `awaiting_reply` | `응답 완료` · 묻고 끝나면 `응답 대기` |
 | `SYSTEM_MESSAGE` + `sender=`·`finished` | 하위 행 닫기(완료). 부모 상태는 그대로 | — |
 | `CHECKPOINT` | 무시. `title`이 비었을 때만 `# USER Objective:` 다음 줄 | — |
 

@@ -37,7 +37,7 @@ PATH의 CLI와 desktop 앱이 내장한 실행 파일의 버전이 다르다. �
 | `status` | 표시 |
 | --- | --- |
 | `busy` | 작업 중. 열린 turn을 유지한다 |
-| `idle` | 응답 완료. 세션은 열린 상태로 유지한다. transcript의 마지막 소식이 `startedAt`(그 프로세스가 세션을 연 시각)보다 이르면 열어 보기만 한 세션이라 `대기 중`·`다음 요청 대기`로 보인다 |
+| `idle` | 응답 완료. 이번 turn의 마지막 공개 글이 물음표로 끝나거나 데스크톱 앱의 마무리 상자(`wrap_up`)에 `ask`를 실었으면 사용자의 답을 기다리는 응답 대기(`awaiting_reply`)다. 세션은 열린 상태로 유지한다. transcript의 마지막 소식이 `startedAt`(그 프로세스가 세션을 연 시각)보다 이르면 열어 보기만 한 세션이라 `대기 중`·`다음 요청 대기`로 보인다 |
 | `waiting` + `waitingFor` `input needed`·`dialog open`·`goal proposal` | 입력 대기 |
 | `waiting` + 그 밖의 `waitingFor` | 승인 대기 |
 

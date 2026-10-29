@@ -95,7 +95,7 @@ Windows Terminal의 탭이나 데스크톱 앱 안의 특정 대화까지는 고
 | `tool_finished` | 작업 중 | 도구 실행 끝. 해당 tool ID만 제거. 전체 작업 완료를 뜻하지 않는다 |
 | `approval_requested` | 승인 대기 | 실제 승인 요청 발생. 모든 도구 호출을 승인 대기로 취급하지 않는다 |
 | `input_requested` | 입력 대기 | 사용자가 답해야 하는 요청 |
-| `turn_finished` | 응답 완료 | 이번 응답 종료. 요청 전체가 성공했다는 뜻은 아니다 |
+| `turn_finished` | 응답 완료 / 응답 대기 | 이번 응답 종료. 요청 전체가 성공했다는 뜻은 아니다. `summary`(마지막 응답 글)가 물음표로 끝나면 사용자의 답을 기다리는 응답 대기(`awaiting_reply`)다 |
 | `interrupted` | 중단됨 | 명시적 사용자 중단 |
 | `session_ended` | 세션 종료 | 명시적 세션 종료. 기록은 유지 |
 | `failed` | 오류 | 세션/turn 전체의 실패가 확실할 때만 사용. `failure`가 있으면 저장하고, 오류가 아닌 상태로 바뀌면 지운다 |

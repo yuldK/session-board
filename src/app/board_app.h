@@ -60,9 +60,19 @@ namespace session_board {
         // 카드 element id다. 늦게 온 떠남이 다른 카드의 팝업을 닫지 않게 가른다.
         std::u8string owner {};
         std::u8string key {};
-        // 카드가 놓인 표면이다. 비어 있으면 위젯 창, 아니면 접힌 알림 팝업이다.
+        // 카드가 놓인 표면이다. 비어 있으면 위젯 창, 아니면 접힌 알림 팝업이나 상태 팝업이다.
         std::u8string surface {};
         bool open { false };
+    };
+    // 세부 정보 팝업 위에 포인터가 들거나 났다. 팝업 안의 단추를 누르러 카드에서 옮겨 오는 동안 닫지 않는다.
+    struct preview_hover_intent
+    {
+        bool inside { false };
+    };
+    // 끝난 세션 하나를 위젯에서 치운다. 그 뒤에 새 소식이 오면 다시 보인다.
+    struct clear_session_intent
+    {
+        std::u8string key {};
     };
     struct provider_intent
     {
@@ -91,16 +101,21 @@ namespace session_board {
         backdrop,
         // 머릿줄이 좁아 모은 단추들이다.
         actions,
+        // 머릿줄 상태 표식이 센 세션들이다.
+        status,
     };
     // 판을 열거나 닫는다. 바깥 누름의 닫힘과 그 판을 연 단추의 누름이 함께 와도 결과가 같도록 뒤집지 않고 값을 정한다.
     struct widget_panel_intent
     {
         widget_panel panel { widget_panel::none };
         bool open { false };
+        // 팝업 바깥 누름·창 활성 전환처럼 플랫폼이 낸 닫힘이다.
+        bool dismissed { false };
     };
-    // 모은 단추의 표지 단추(`popup`이 거짓)나 그 팝업(`popup`이 참)에 포인터가 들거나 났다.
-    struct actions_hover_intent
+    // 머무르면 여는 판(모은 단추·상태)의 표지(`popup`이 거짓)나 그 팝업(`popup`이 참)에 포인터가 들거나 났다.
+    struct panel_hover_intent
     {
+        widget_panel panel { widget_panel::none };
         bool popup { false };
         bool inside { false };
     };
@@ -113,6 +128,8 @@ namespace session_board {
         // 상세 창 목록이면 참이다. 위젯과 상세 창은 스크롤을 따로 갖는다.
         bool detail { false };
         bool updates { false };
+        // 머릿줄 상태 팝업이면 참이다.
+        bool status { false };
     };
     struct widget_state_intent
     {
@@ -155,6 +172,14 @@ namespace session_board {
     {
         float value { widget_default_opacity };
     };
+    // 목록 카드 바탕의 진하기다. 낮을수록 창의 흐림이 카드 뒤로 비친다.
+    inline constexpr float widget_default_card_opacity { 0.55f };
+    // 카드 진하기를 정한다. `relative`면 지금 값에 더한다 (슬라이더 끌기·키).
+    struct card_opacity_intent
+    {
+        float value { widget_default_card_opacity };
+        bool relative { false };
+    };
     // 그 세션이 열린 Claude Code·Codex 창을 앞으로 가져온다.
     struct focus_session_intent
     {
@@ -191,6 +216,7 @@ namespace session_board {
         std::u8string accent_id { luil::default_accent_id };
         widget_backdrop backdrop { widget_backdrop::acrylic };
         float opacity { widget_default_opacity };
+        float card_opacity { widget_default_card_opacity };
 
         [[nodiscard]] bool operator==(const widget_appearance&) const = default;
     };
@@ -203,8 +229,10 @@ namespace session_board {
     // 창(위젯·상세)의 마지막 자리와 크기다. 값이 없거나 깨졌으면 빈 값이라 기본 자리로 연다.
     [[nodiscard]] std::optional<luil::win32::window_placement> load_window_placement(const std::filesystem::path& file);
     // 실패해도 창 동작을 막지 않는다. 다음 이동 때 다시 쓴다.
-    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, bool header_bottom = false) noexcept;
+    //  - 위젯은 머릿줄 방향과 목록을 접어 두었는지도 함께 적는다. 접혀 있어도 크기는 펼친 크기다.
+    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, bool header_bottom = false, bool collapsed = false) noexcept;
     [[nodiscard]] bool load_widget_header_bottom(const std::filesystem::path& file) noexcept;
+    [[nodiscard]] bool load_widget_collapsed(const std::filesystem::path& file) noexcept;
 
     [[nodiscard]] luil::caption_config board_caption();
     [[nodiscard]] luil::caption_config widget_caption();
@@ -242,8 +270,14 @@ namespace session_board {
         void make_settings_popup(luil::ui_frame& frame);
         // 좁은 머릿줄에서 모은 단추를 표지 단추 아래에 띄운다.
         void make_actions_popup(luil::ui_frame& frame);
-        // 머릿줄의 단추들이다. 넓으면 머릿줄에, 좁으면 모은 단추 팝업에 선다.
+        // 머릿줄 상태 표식에 머무르면 표식마다 센 세션을 이름으로 보인다.
+        void make_status_popup(luil::ui_frame& frame, std::int64_t now);
+        // 머릿줄의 단추들이다. 넓으면 머릿줄에, 좁으면 모은 단추 팝업에 선다. 접기·닫기는 늘 머릿줄에 남으므로 뺀다.
         [[nodiscard]] std::vector<std::unique_ptr<luil::button_element>> widget_actions() const;
+        // 목록 카드를 반투명하게 칠해 창의 흐림을 비추는가다. 흐림 없는 투명 배경과 불투명(진하기 100%)에서는 칠한다.
+        [[nodiscard]] bool cards_translucent() const noexcept;
+        // 위젯 목록에 오르는 세션이다. 정리한 끝난 세션은 뺀다.
+        [[nodiscard]] std::vector<const session_snapshot*> widget_visible(std::int64_t now) const;
         // 상세 창의 tree다. 보조 창 client의 (0,0)에서 시작한다.
         [[nodiscard]] std::unique_ptr<luil::root_element> make_detail_tree(std::int64_t now);
         // 상세 창 본문 자리의 라이선스 화면이다. 왼쪽은 구성 요소, 오른쪽은 고른 것의 원문이다.
@@ -287,16 +321,25 @@ namespace session_board {
         bool collapsed_ { false };
         bool pinned_ { true };
         widget_panel panel_ { widget_panel::none };
-        // 모은 단추의 표지 단추와 팝업 위에 포인터가 있는가다. 둘 다 떠나면 잠시 뒤 팝업을 닫는다.
-        //  - 표지 단추에서 팝업으로 옮기는 사이 잠깐 둘 다 떠난 것으로 보이므로 곧바로 닫지 않는다.
-        bool actions_trigger_hover_ { false };
-        bool actions_popup_hover_ { false };
-        std::optional<std::chrono::steady_clock::time_point> actions_close_at_ {};
+        // 머무르면 여는 판의 표지와 팝업 위에 포인터가 있는가다. 둘 다 떠나면 잠시 뒤 팝업을 닫는다.
+        //  - 표지에서 팝업으로 옮기는 사이 잠깐 둘 다 떠난 것으로 보이므로 곧바로 닫지 않는다.
+        // 플랫폼이 마지막으로 닫은 판과 그 시각이다. 그 판을 연 단추를 눌러 닫았으면 같은 누름이 곧 그 판을 다시 열려 한다.
+        //  - 닫힘은 누름보다 먼저 앱에 닿는다. 앱이 그새 단추를 닫힌 모양으로 다시 그리면 누름은 그 새 단추를 눌러 '열기'를 낸다.
+        widget_panel dismissed_panel_ { widget_panel::none };
+        std::chrono::steady_clock::time_point dismissed_at_ {};
+        bool hover_trigger_ { false };
+        bool hover_popup_ { false };
+        std::optional<std::chrono::steady_clock::time_point> hover_close_at_ {};
         // 표지 단추 오른쪽 끝의 창 안 자리(논리 픽셀)다. 머릿줄을 그린 tree가 배치 뒤에 채운다. 단추를 모으지 않았으면 비어 있다.
         std::optional<float> actions_right_ {};
+        // 상태 표식 왼쪽 끝의 창 안 자리(논리 픽셀)다. 머릿줄을 그린 tree가 배치 뒤에 채운다.
+        std::optional<float> status_left_ {};
+        // 상태 팝업이 위젯 왼쪽에서 비켜 선 거리(논리 픽셀)다. 그 안 세션 줄의 세부 정보 팝업을 위젯 밖에 맞출 때 쓴다.
+        float status_popup_x_ { 0.0f };
         std::u8string accent_id_ { luil::default_accent_id };
         widget_backdrop backdrop_ { widget_backdrop::acrylic };
         float opacity_ { widget_default_opacity };
+        float card_opacity_ { widget_default_card_opacity };
         // 상세 창의 마지막 자리다. 비어 있으면 위젯 왼쪽의 기본 자리로 연다.
         //  - 파일이 비어 있으면 저장하지 않는다 (테스트 데이터로 연 실행). 그래도 이번 실행 안에서는 다시 열 때 쓴다.
         std::filesystem::path detail_placement_file_ {};
@@ -316,6 +359,11 @@ namespace session_board {
         std::size_t license_lines_columns_ { 0 };
         // 세부 정보를 띄운 카드다. 비어 있으면 팝업이 없다.
         preview_intent preview_ {};
+        // 카드를 떠난 뒤 세부 정보 팝업을 닫을 때다. 그사이 팝업에 포인터가 들면 닫지 않는다.
+        std::optional<std::chrono::steady_clock::time_point> preview_close_at_ {};
+        bool preview_popup_hover_ { false };
+        // 상태 팝업의 자리·폭(논리 픽셀)이다. 그 안 카드의 세부 정보를 상태 팝업 옆에 붙일 때 쓴다.
+        float status_popup_width_ { 0.0f };
         // 그 카드 윗변의 표면 안 자리(논리 픽셀)다. 카드를 그린 tree가 배치 뒤에 채운다. 화면에 없으면 비어 있다.
         std::optional<float> preview_top_ {};
         // 정리한 세션과 그때의 마지막 소식이다. 이보다 새 소식이 오면 다시 보인다.
@@ -325,6 +373,7 @@ namespace session_board {
         float scroll_ { 0.0f };
         float detail_scroll_ { 0.0f };
         float update_scroll_ { 0.0f };
+        float status_scroll_ { 0.0f };
         HANDLE changes_ { INVALID_HANDLE_VALUE };
         std::chrono::steady_clock::time_point next_tick_ {};
         std::atomic<bool> closed_ { false };
@@ -336,7 +385,8 @@ namespace session_board {
         // `placement_file`이 비어 있으면 자리를 저장하지 않는다 (테스트 데이터로 연 실행).
         // `restored`는 저장한 자리로 연 실행이다.
         // `appearance`의 흐림·진하기로 위젯 창의 DWM 합성을 처음부터 맞춘다.
-        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance, widget_appearance appearance = {}, bool header_bottom = false);
+        // `collapsed`면 목록을 접은 채로 연다 (지난번에 접어 둔 채 닫은 실행).
+        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance, widget_appearance appearance = {}, bool header_bottom = false, bool collapsed = false);
         void on_started(luil::app_host& host) override;
         void execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command) override;
         [[nodiscard]] luil::app_message make_window_metrics_message(float width, float height, float scale) override;
@@ -348,6 +398,9 @@ namespace session_board {
         std::filesystem::path placement_file_ {};
         bool restored_ { false };
         bool header_bottom_ { false };
+        bool collapsed_ { false };
+        // 마지막으로 저장한 펼친 자리다. 접고 펼칠 때 자리는 그대로 두고 접힘만 바꿔 다시 쓴다.
+        std::optional<luil::win32::window_placement> placement_ {};
         widget_appearance appearance_ {};
         single_instance* instance_ { nullptr };
     };

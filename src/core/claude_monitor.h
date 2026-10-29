@@ -44,6 +44,10 @@ namespace session_board {
         session_snapshot snapshot_ {};
         bool sidechain_ { false };
         std::int64_t started_ms_ { 0 };
+        // 이번 turn의 마지막 공개 글이 묻고 끝났는가, 데스크톱 앱의 질문 상자(`wrap_up`의 `ask`)를 띄웠는가다.
+        //  - turn이 끝날 때 둘 중 하나면 응답 대기다. 새 요청이 오면 거둔다.
+        bool text_asks_ { false };
+        bool box_asks_ { false };
         // 백그라운드로 띄운 명령의 tool_use ID와 설명이다. 결과 레코드의 작업 ID와 짝짓는다.
         std::map<std::string, std::string> background_requests_ {};
         // 작업 멈춤 도구의 tool_use ID와 멈출 작업 ID다.

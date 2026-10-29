@@ -576,6 +576,9 @@ namespace session_board {
                 snapshot_.active_tools.clear();
                 snapshot_.activity = "작업 내용 수신 대기";
                 snapshot_.last_event = "turn_started";
+                snapshot_.awaiting_reply = false;
+                text_asks_ = false;
+                box_asks_ = false;
                 changed = true;
             }
             if (!changed)
@@ -616,13 +619,21 @@ namespace session_board {
                     // 비공개 thinking과 서버 도구 결과는 작업 설명으로 쓰지 않는다.
                     const std::string part_type { text_field(part, "type", 32) };
                     if (part_type == "text")
-                        public_message(raw_text(part, "text"));
+                    {
+                        const auto text { raw_text(part, "text") };
+                        public_message(text);
+                        if (!text.empty())
+                            text_asks_ = asks_user(text);
+                    }
                     else if (part_type == "tool_use")
                     {
                         const auto tool_id { text_field(part, "id", 512) };
                         const auto name { text_field(part, "name", 128) };
                         tool_started(tool_id, name);
                         snapshot_.last_event = "tool_started";
+                        // 데스크톱 앱의 마무리 상자에 물음을 실었으면 응답이 끝나도 사용자의 답을 기다린다.
+                        if (const auto ask { part.find("input") }; name.ends_with("wrap_up") && ask != part.end() && ask->is_object() && !text_field(*ask, "ask", 512).empty())
+                            box_asks_ = true;
                         // 백그라운드 명령은 결과가 곧바로 와서 도구로는 끝난 것처럼 보인다. 결과의 작업 ID로 하위 행을 만든다.
                         const auto input { part.find("input") };
                         if (sidechain_ || tool_id.empty() || input == part.end() || !input->is_object() || background_requests_.size() + stop_requests_.size() >= 64)
@@ -649,7 +660,8 @@ namespace session_board {
                 snapshot_.turn_closed = true;
                 snapshot_.active_tools.clear();
                 snapshot_.tool_name.clear();
-                snapshot_.activity = "응답 완료";
+                snapshot_.awaiting_reply = text_asks_ || box_asks_;
+                snapshot_.activity = snapshot_.awaiting_reply ? "응답 대기" : "응답 완료";
                 snapshot_.last_event = "turn_finished";
             }
         }
@@ -831,7 +843,7 @@ namespace session_board {
                 if (snapshot.status != session_status::interrupted)
                 {
                     snapshot.status = session_status::idle;
-                    snapshot.activity = "응답 완료";
+                    snapshot.activity = snapshot.awaiting_reply ? "응답 대기" : "응답 완료";
                 }
                 snapshot.turn_closed = true;
             }

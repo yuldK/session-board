@@ -150,6 +150,22 @@ namespace session_board {
             require(view.summary == "설정 파일을 확인하겠습니다.", "Copied record from another session applied.");
             reader.consume(assistant({ { { "type", "text" }, { "text", "완료했습니다." } } }, "end_turn"));
             require(view.status == session_status::idle && view.turn_closed && view.summary == "완료했습니다.", "End of turn not shown.");
+            // 보고로 끝난 응답은 응답 완료, 묻고 끝난 응답은 사용자의 답을 기다리는 응답 대기다.
+            require(!view.awaiting_reply && view.activity == "응답 완료", "Reported answer shown as waiting for a reply.");
+            reader.consume(prompt("prompt-q1", "질문"));
+            reader.consume(assistant({ { { "type", "text" }, { "text", "고쳤습니다.\n\n바로 커밋할까요?" } } }, "end_turn"));
+            require(view.awaiting_reply && view.activity == "응답 대기", "Question at the end of an answer not shown as waiting.");
+            // 데스크톱 앱의 마무리 상자에 물음을 실었으면 끝 글이 보고여도 답을 기다린다. 물음 없는 상자는 아니다.
+            reader.consume(prompt("prompt-q2", "질문"));
+            reader.consume(assistant({ { { "type", "tool_use" }, { "id", "toolu_q" }, { "name", "mcp__ccd_turn__wrap_up" }, { "input", { { "recap", "고쳤습니다." }, { "ask", "커밋할까요?" } } } } }));
+            reader.consume(tool_result("toolu_q"));
+            reader.consume(assistant({ { { "type", "text" }, { "text", "고쳤습니다." } } }, "end_turn"));
+            require(view.awaiting_reply && view.activity == "응답 대기", "Question box not shown as waiting.");
+            reader.consume(prompt("prompt-q3", "질문"));
+            reader.consume(assistant({ { { "type", "tool_use" }, { "id", "toolu_r" }, { "name", "mcp__ccd_turn__wrap_up" }, { "input", { { "recap", "고쳤습니다." } } } } }));
+            reader.consume(tool_result("toolu_r"));
+            reader.consume(assistant({ { { "type", "text" }, { "text", "고쳤습니다." } } }, "end_turn"));
+            require(!view.awaiting_reply && view.activity == "응답 완료", "Question survived into a reported turn.");
             reader.consume(prompt("prompt-2", "다음"));
             require(view.turn_id == "prompt-2" && view.summary.empty() && !view.turn_closed, "New turn not reset.");
             reader.consume(assistant({ { { "type", "tool_use" }, { "id", "toolu_3" }, { "name", "Bash" } } }));
@@ -312,6 +328,11 @@ namespace session_board {
             answered.updated_ms = 5200;
             apply_claude_runtime(answered, *opened_runtime);
             require(answered.status == session_status::idle && answered.turn_closed && answered.activity == "응답 완료", "Answer after opening not shown.");
+            auto asked { earlier };
+            asked.updated_ms = 5200;
+            asked.awaiting_reply = true;
+            apply_claude_runtime(asked, *opened_runtime);
+            require(asked.turn_closed && asked.activity == "응답 대기", "Question after opening not shown as waiting.");
             session_snapshot unused {};
             apply_claude_runtime(unused, *opened_runtime);
             require(unused.status == session_status::idle && !unused.turn_closed && unused.activity == "다음 요청 대기", "Registry-only session shown as answered.");

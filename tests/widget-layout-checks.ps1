@@ -138,6 +138,21 @@ try {
     Move-Widget $x $top_y $width $height
     $null = Wait-Header $top_y
     Assert-CaptionHit $top_y
+    # 카드 진하기를 5%까지 내려도 카드 글에는 후광·테가 서서 읽힌다. 값은 다시 50%로 둔다.
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $card = Wait-LuilElement -id 'widget-card-opacity' -all_surfaces
+    Assert-Layout $card.Current.IsEnabled 'Card opacity was not adjustable over the default Acrylic backdrop.'
+    $null = Set-LuilScroll -fraction 0.05 $card
+    $null = Wait-LuilElement -id 'widget-card-opacity-value' -name '5%' -all_surfaces
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Wait-LuilElement -id 'widget-card-opacity' -all_surfaces -absent
+    Save-LuilShot -path (Join-Path $work_directory 'cards-faint.png')
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Set-LuilScroll -fraction 0.5 (Wait-LuilElement -id 'widget-card-opacity' -all_surfaces)
+    $null = Wait-LuilElement -id 'widget-card-opacity-value' -name '50%' -all_surfaces
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Wait-LuilElement -id 'widget-card-opacity' -all_surfaces -absent
+    Save-LuilShot -path (Join-Path $work_directory 'cards-half.png')
     Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
     $null = Wait-LuilElement -id 'widget-signal' -absent
     $null = Wait-Header $top_y
@@ -189,11 +204,11 @@ try {
     Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
     $null = Wait-LuilElement -id 'widget-signal' -absent
     Send-Update '동작 중 알림 금지' 'running-notice'
-    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 2 · 완료 0 · 새 알림 0'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 2 · 응답 0 · 새 알림 0'
     Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'A newly running session generated a popup.'
     # 작업 중이던 세션이 끝나면 무엇이 끝났는지 놓치지 않게 닫을 때까지 남는 알림을 띄운다.
     Send-Update '작업 완료 알림' 'running-notice' 'turn_finished'
-    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 1 · 완료 1 · 새 알림 1'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 0 · 진행 1 · 응답 1 · 새 알림 1'
     $null = Wait-LuilElement -id 'update-count' -name '작업 끝남 1개' -all_surfaces
     $null = Wait-LuilElement -name '작업 완료 알림' -all_surfaces
     $done_button = Wait-LuilElement -search 'update-.*-confirm' -name '닫기' -all_surfaces
@@ -214,34 +229,50 @@ try {
     Assert-Layout ($focus_button.Current.Name -match '세션 창으로 이동|창 정보가 없습니다') 'Notification card has no session focus button.'
     Assert-Layout (-not $waiting_button.Current.IsEnabled) 'An outstanding response notification can be dismissed.'
     Send-Update '알림을 만들지 않는 진행 메시지' 'ordinary-notice'
-    $null = Wait-LuilElement -id 'widget-count' -name '확인 1 · 진행 2 · 완료 1 · 새 알림 1'
+    $null = Wait-LuilElement -id 'widget-count' -name '확인 1 · 진행 2 · 응답 1 · 새 알림 1'
     $null = Wait-LuilElement -id 'update-count' -name '확인 필요 1개' -all_surfaces
     Assert-Layout ($null -eq (Find-LuilElement -name '알림을 만들지 않는 진행 메시지' -all_surfaces)) 'Ordinary progress appeared alongside the response request.'
+    # 표식 넷이 다 서도 기본 폭의 머릿줄은 단추를 모으지 않는다. 모을지는 수가 아니라 폭으로만 정한다.
+    Assert-Layout ($null -ne (Find-LuilElement -id 'widget-pin') -and $null -eq (Find-LuilElement -id 'widget-more')) 'Default-width header gathered its buttons when every count was shown.'
     Save-LuilShot -path (Join-Path $work_directory 'header-counts.png')
+    # 상태 표식은 머무르거나 누르면 표식마다 센 세션을 팝업으로 보인다. 다시 누르면 닫힌다.
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-count')
+    $status = Get-PopupSurface 'status-attention-name'
+    Assert-Layout ($status.Current.BoundingRectangle.Top -ge (Get-Box).bottom) 'Status details did not open below the header.'
+    $null = Wait-LuilElement -id 'status-running-name' -all_surfaces
+    $null = Wait-LuilElement -id 'status-done-name' -all_surfaces
+    # 응답을 기다리는 알림은 확인 필요 묶음이 이미 보이므로 새 알림 묶음에 다시 세우지 않는다.
+    Assert-Layout ($null -eq (Find-LuilElement -id 'status-alerts-name' -all_surfaces)) 'A waiting session appeared twice in the status details.'
+    Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'Notifications overlapped the status details.'
+    Save-LuilShot -path (Join-Path $work_directory 'status-details.png') -surface $status
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-count')
+    $null = Wait-LuilElement -id 'status-attention-name' -all_surfaces -absent
+    $null = Wait-LuilElement -id 'update-count' -all_surfaces
 
-    # 표식이 넷 다 서면 가장 좁은 위젯의 머릿줄에는 단추가 다 들지 않는다. 닫기만 남기고 하나로 모아 팝업으로 펼친다.
+    # 가장 좁은 위젯의 머릿줄은 접기·닫기만 남기고 나머지 단추를 하나로 모아 팝업으로 펼친다.
     Move-Widget $x $top_y ([int](320 * $scale)) $caption
     $null = Wait-LuilElement -id 'widget-more'
-    Assert-Layout ($null -eq (Find-LuilElement -id 'widget-collapse')) 'Narrow header kept every button.'
+    Assert-Layout ($null -eq (Find-LuilElement -id 'widget-pin')) 'Narrow header kept every button.'
+    $null = Wait-LuilElement -id 'widget-collapse'
     $null = Wait-LuilElement -id 'compact-close'
     Save-LuilShot -path (Join-Path $work_directory 'header-narrow.png')
     Invoke-LuilElement (Wait-LuilElement -id 'widget-more')
-    $actions = (Get-PopupSurface 'widget-collapse').Current.BoundingRectangle
+    $actions = (Get-PopupSurface 'widget-pin').Current.BoundingRectangle
     $more = (Wait-LuilElement -id 'widget-more').Current.BoundingRectangle
     Assert-Layout ($actions.Top -ge $more.Bottom -and [Math]::Abs($actions.Right - $more.Right) -le [Math]::Ceiling(8 * $scale)) 'Gathered buttons did not open under their button.'
     Assert-Layout ($null -eq (Find-LuilElement -id 'update-count' -all_surfaces)) 'Notifications overlapped the gathered buttons.'
-    Save-LuilShot -path (Join-Path $work_directory 'header-gathered.png') -surface (Get-PopupSurface 'widget-collapse')
+    Save-LuilShot -path (Join-Path $work_directory 'header-gathered.png') -surface (Get-PopupSurface 'widget-pin')
     # 모은 단추에서 연 설정 판은 모은 단추 팝업을 대신한다.
     Invoke-LuilElement (Wait-LuilElement -id 'widget-theme' -all_surfaces)
     $null = Wait-LuilElement -id 'theme-mode' -all_surfaces
-    Assert-Layout ($null -eq (Find-LuilElement -id 'widget-collapse' -all_surfaces)) 'Gathered buttons stayed open beside the settings panel.'
+    Assert-Layout ($null -eq (Find-LuilElement -id 'widget-pin' -all_surfaces)) 'Gathered buttons stayed open beside the settings panel.'
     Invoke-LuilElement (Wait-LuilElement -id 'widget-more')
-    $null = Wait-LuilElement -id 'widget-collapse' -all_surfaces
+    $null = Wait-LuilElement -id 'widget-pin' -all_surfaces
     Invoke-LuilElement (Wait-LuilElement -id 'widget-more')
-    $null = Wait-LuilElement -id 'widget-collapse' -all_surfaces -absent
+    $null = Wait-LuilElement -id 'widget-pin' -all_surfaces -absent
     $null = Wait-LuilElement -id 'update-count' -all_surfaces
     Move-Widget $x $top_y $width $caption
-    $null = Wait-LuilElement -id 'widget-collapse'
+    $null = Wait-LuilElement -id 'widget-pin'
 
     Move-Widget $x $bottom_y $width $caption
     $null = Wait-Header $bottom_y
@@ -294,6 +325,15 @@ try {
     Invoke-LuilElement (Wait-LuilElement -id 'widget-collapse')
     $null = Wait-LuilElement -name '사용자 입력을 기다립니다' -all_surfaces
     Assert-Layout (-not (Wait-LuilElement -name '응답 대기' -all_surfaces).Current.IsEnabled) 'Input request was not retained as a persistent notification.'
+    # 묻고 끝난 응답도 답을 기다리는 알림이라 접힌 위젯 밖에 띄운다. 답하지 않기로 하면 숨길 수 있다.
+    Send-Update '커밋 준비' 'reply-notice'
+    Send-Update '바로 커밋할까요?' 'reply-notice' 'turn_finished'
+    $null = Wait-LuilElement -name '바로 커밋할까요?' -all_surfaces
+    $reply_button = Wait-LuilElement -search 'update-.*-confirm' -name '닫기' -all_surfaces
+    Assert-Layout $reply_button.Current.IsEnabled 'A question at the end of an answer cannot be dismissed.'
+    Save-LuilShot -path (Join-Path $work_directory 'reply-notification.png') -surface (Get-UpdateSurface)
+    Invoke-LuilElement $reply_button
+    $null = Wait-LuilElement -name '바로 커밋할까요?' -all_surfaces -absent
     @{
         checks = $checks; desktop = $desktop_name.ToString(); scale = $scale; isolated = $true
         header_top = $true; header_bottom = $true; header_anchor = $true; caption_hit = $true; work_area_limit = $true

@@ -12,6 +12,7 @@
 #include "include/core/SkRRect.h"
 #include "include/core/SkRect.h"
 #include "include/effects/SkGradient.h"
+#include "include/effects/SkImageFilters.h"
 #include "include/utils/SkParsePath.h"
 
 #include <nlohmann/json.hpp>
@@ -70,6 +71,20 @@ namespace session_board {
             result->set_tooltip(std::move(text));
             result->set_hit_opaque(false);
             return result;
+        }
+
+        // 누를 수 있는 판 안 글의 툴팁을 뺀다.
+        //  - luil은 툴팁이 달린 요소를 hit를 흡수하지 않게 해도 누를 대상으로 본다. 행·카드 안의 라벨이 툴팁을 가지면 그 자리의
+        //    누름을 라벨이 받아 행의 클릭이 서지 않는다. 글 전체는 판 자신의 툴팁이나 세부 정보가 보인다.
+        //  - 누를 수 있는 단추의 툴팁은 무엇을 하는지 알리므로 남긴다.
+        void strip_tooltips(const luil::ui_element& element)
+        {
+            for (const auto& child : element.children())
+            {
+                if (child->action(luil::ui_trigger::left_click) == nullptr)
+                    child->set_tooltip({});
+                strip_tooltips(*child);
+            }
         }
 
         // 팔레트 역할 하나로 칠한 면이다. 구분선·상태 점·선택 표식이 모두 이 꼴이다.
@@ -158,8 +173,9 @@ namespace session_board {
             }
 
         private:
-            static constexpr float backing_alpha { 0.55f };
-            static constexpr float card_alpha { 0.6f };
+            // 아크릴이 이미 뒤를 흐리고 명암에 맞춘 막을 덧씌운다. 판은 옅게 깔아 뒤의 색이 번져 비치게 한다.
+            static constexpr float backing_alpha { 0.25f };
+            static constexpr float card_alpha { 0.5f };
         };
 
         // Simple Icons(CC0)의 Claude·OpenAI 표식 경로다 (24×24 viewBox).
@@ -604,7 +620,10 @@ namespace session_board {
             switch (session.status)
             {
             case session_status::idle:
-                return session.turn_closed ? u8"응답 완료" : u8"대기 중";
+                // 응답이 묻고 끝났으면 사용자의 답을 기다리는 것이고, 보고로 끝났으면 맡긴 일을 마친 것이다.
+                if (session.turn_closed)
+                    return session.awaiting_reply ? u8"응답 대기" : u8"응답 완료";
+                return u8"대기 중";
             case session_status::running:
                 // 오래 도는 도구는 확인할 일이 아니라 얼마나 돌았는지가 궁금한 일이다. 마지막 소식이 그 도구의 시작이다.
                 if (long_running_tool(session, now))
@@ -930,6 +949,37 @@ namespace session_board {
             return status_view(id, state_text(session, now), own_attention(session, now), session.status == session_status::failed, session.status == session_status::running, closed);
         }
 
+        // 한 줄 머리에 넣는 상태다. 상태 칸과 같은 말을 쓰되 글 길이만큼만 차지한다.
+        //  - 확인할 일은 글리프가 붙는 배지, 작업 중은 도는 표시, 그 밖은 점과 흐린 글이다.
+        std::unique_ptr<luil::ui_element> status_inline(const std::u8string& id, const session_snapshot& session, const std::int64_t now)
+        {
+            const luil::stack_config config { .direction = luil::stack_direction::row, .spacing = 6.0f, .cross_alignment = luil::stack_alignment::center };
+            auto cell { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-cell" }, config) };
+            const bool child_attention { !own_attention(session, now) && children_need_attention(session, now) };
+            if (own_attention(session, now) || child_attention)
+            {
+                std::u8string text { state_text(session, now) };
+                bool error { session.status == session_status::failed };
+                if (child_attention)
+                {
+                    // 부모 자신은 멀쩡하므로 배지는 하위의 사정을 말한다.
+                    const auto children { ordered_children(session, now) };
+                    text = u8"하위 " + child_state_text(*children.front(), now);
+                    error = children.front()->status == session_status::failed;
+                }
+                auto badge { std::make_unique<luil::badge_element>(luil::ui_element_id { kind_badge, id }, luil::badge_config { .text = text, .tone = error ? luil::badge_tone::error : luil::badge_tone::warning }) };
+                badge->set_hit_opaque(false);
+                cell->add_fit(std::move(badge));
+                return cell;
+            }
+            const bool running { session.status == session_status::running };
+            const bool closed { session.status == session_status::ended || session.status == session_status::interrupted };
+            const float mark { running ? running_mark_size : 8.0f };
+            cell->add(status_mark(id, running, closed, 8.0f), { .length = mark, .cross_length = mark });
+            cell->add_fit(label(id, state_text(session, now), 11.0f, running ? luil::label_color_role::primary : luil::label_color_role::dim));
+            return cell;
+        }
+
         std::unique_ptr<luil::ui_element> child_status_cell(const std::u8string& id, const session_child& child, const std::int64_t now)
         {
             const bool attention { child_needs_attention(child, now) };
@@ -969,6 +1019,7 @@ namespace session_board {
             result->set_access_name(provider_text(session) + u8" · " + state_text(session, now) + u8" · " + title);
             result->set_tooltip(title);
             result->set_action(luil::ui_trigger::left_click, luil::make_message_action(select_session_intent { id }));
+            strip_tooltips(*result);
             return result;
         }
 
@@ -1005,6 +1056,7 @@ namespace session_board {
             result->set_access_name(u8"하위 · " + child_kind_text(child) + u8" · " + child_state_text(child, now) + u8" · " + title);
             result->set_tooltip(title);
             result->set_action(luil::ui_trigger::left_click, luil::make_message_action(select_session_intent { id }));
+            strip_tooltips(*result);
             return result;
         }
 
@@ -1208,11 +1260,14 @@ namespace session_board {
         constexpr float widget_group_gap { 6.0f };
         // 접힌 위젯의 알림 팝업 id다. 그 안 카드의 세부 정보 팝업이 이 표면에 붙는다.
         constexpr std::u8string_view update_surface { u8"session-updates" };
+        // 머릿줄 상태 팝업 id다. 그 안 세션 줄의 세부 정보 팝업이 이 표면에 붙는다.
+        constexpr std::u8string_view status_surface { u8"widget-status" };
         constexpr float widget_footer_height { 30.0f };
         constexpr float widget_setting_row { 26.0f };
         // 진하기의 자석이다. 0%는 바탕 없이 글만 뜨고, 100%는 DWM 합성을 끈 불투명 창이다.
         constexpr std::array<float, 6> widget_opacity_magnets { 0.0f, 0.1f, 0.25f, 0.5f, 0.75f, 1.0f };
         constexpr float widget_row_inset { 12.0f };
+        constexpr float widget_card_radius { 10.0f };
         // 위젯 설정 줄의 테마 카드다. luil 기본(112×70)은 위젯 폭에 세 장이 들지 않아 줄인다.
         constexpr float widget_theme_card_width { 88.0f };
         constexpr float widget_theme_preview_height { 46.0f };
@@ -1222,6 +1277,8 @@ namespace session_board {
         constexpr float header_mark_spacing { 2.0f };
         constexpr float header_digit_width { 7.0f };
         constexpr float header_count_gap { 6.0f };
+        // 표식 넷이 한 자리 수로 다 선 폭이다. 단추를 모을지 이 폭으로 정해, 수가 바뀌어도 단추가 들고 나지 않게 한다.
+        constexpr float header_counts_reserve { 4.0f * (header_mark_size + header_mark_spacing + header_digit_width) + 3.0f * header_count_gap };
         // 단추를 모을지 정할 때 제목에 남겨 둘 폭이다. 이보다 좁으면 제목이 말줄임으로 줄어든다.
         constexpr float header_title_minimum { 84.0f };
         constexpr float header_spacing { 2.0f };
@@ -1255,12 +1312,24 @@ namespace session_board {
             return [panel](const luil::popup_dismiss_reason reason) {
                 if (reason == luil::popup_dismiss_reason::pointer_press_outside || reason == luil::popup_dismiss_reason::escape_key
                     || reason == luil::popup_dismiss_reason::activation_changed || reason == luil::popup_dismiss_reason::anchor_closed)
-                    return luil::make_app_action(widget_panel_intent { panel, false });
+                    return luil::make_app_action(widget_panel_intent { .panel = panel, .open = false, .dismissed = true });
                 return luil::input_action {};
             };
         }
 
-        // 머릿줄 상태 표식 하나다. 수가 0이면 세우지 않는다.
+        // 판을 여닫는 단추는 마우스로 누르는 순간 뒤집는다.
+        //  - 판 밖을 누르면 그 누름에서 판이 닫히고, 뗄 때는 이미 닫힌 판의 단추가 다시 그려져 있다. 떼는 순간의 클릭으로
+        //    뒤집으면 닫힌 판을 도로 연다. 누르는 순간이면 닫힘과 단추가 같은 판(열림)을 보고 둘 다 닫는다.
+        //  - 누름 역할이 선 단추는 떼도 클릭이 나가지 않는다. 클릭 액션은 키보드·보조 기술의 실행으로만 쓰인다.
+        void press_toggles(luil::ui_element& button)
+        {
+            const luil::ui_action* const click { button.action(luil::ui_trigger::left_click) };
+            if (click == nullptr)
+                return;
+            button.set_pointer_drag_target(luil::pointer_drag_target { .on_press = *click });
+        }
+
+        // 머릿줄 상태 표식 하나다.
         struct header_count
         {
             std::u8string id {};
@@ -1279,12 +1348,18 @@ namespace session_board {
         {
             float width { 0.0f };
             for (const auto& item : counts)
-                if (item.count > 0)
-                    width += (width > 0.0f ? header_count_gap : 0.0f) + header_count_width(item);
+                width += (width > 0.0f ? header_count_gap : 0.0f) + header_count_width(item);
             return width;
         }
 
+        // 0인 표식은 흐리게 둔다. 자리는 지키되 눈은 수가 있는 표식으로 간다.
+        void quiet_tint(luil::ui_color_palette& palette)
+        {
+            palette.primary_foreground = luil::with_alpha(palette.primary_foreground, 0.45f);
+        }
+
         // 머릿줄의 상태 표식 줄이다. 보조 기술에는 표식을 하나씩 읽히지 않고 네 수를 한 문장으로 알린다.
+        //  - 누르면 상태 팝업을 여닫으므로 단추로 읽힌다.
         class header_status final : public luil::ui_element
         {
         public:
@@ -1296,23 +1371,29 @@ namespace session_board {
                 for (const auto& item : counts)
                 {
                     name_ += (name_.empty() ? std::u8string {} : std::u8string { u8" · " }) + item.name + u8" " + u8(std::to_string(item.count));
-                    if (item.count == 0)
-                        continue;
                     const luil::stack_config chip_config { .direction = luil::stack_direction::row, .spacing = header_mark_spacing, .cross_alignment = luil::stack_alignment::center };
                     auto chip { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, item.id }, chip_config) };
+                    // 도는 표시는 일하는 세션이 있을 때만이다. 없으면 같은 모양의 멈춘 글리프다.
                     std::unique_ptr<luil::ui_element> mark {};
-                    if (item.glyph == 0)
+                    if (item.glyph == 0 && item.count > 0)
                         mark = std::make_unique<luil::spinner_element>(luil::ui_element_id { kind_layout, item.id + u8"-mark" }, luil::spinner_config { .size = header_mark_size });
                     else
-                        mark = std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_layout, item.id + u8"-mark" }, luil::glyph_config { .glyph = item.glyph, .font_size = header_mark_size });
+                    {
+                        const char32_t glyph { item.glyph == 0 ? luil::codicons::icon_loading : item.glyph };
+                        mark = std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_layout, item.id + u8"-mark" }, luil::glyph_config { .glyph = glyph, .font_size = header_mark_size });
+                    }
                     mark->set_hit_opaque(false);
                     chip->add(std::move(mark), { .length = header_mark_size, .cross_length = header_mark_size });
                     chip->add_flexible(label(item.id + u8"-value", u8(std::to_string(item.count)), 11.0f));
-                    row->add(std::move(chip), header_count_width(item));
+                    if (item.count == 0)
+                        row->add(std::make_unique<palette_scope>(item.id + u8"-quiet", quiet_tint, std::move(chip)), header_count_width(item));
+                    else
+                        row->add(std::move(chip), header_count_width(item));
                 }
                 add_child(std::move(row));
-                set_tooltip(name_);
                 set_hit_opaque(false);
+                // 표식 줄 전체가 누르고 머무르는 자리다. 안의 수 라벨이 누름을 가로채지 않게 한다.
+                strip_tooltips(*this);
             }
 
             void arrange(const luil::arrange_context& context) override
@@ -1329,7 +1410,7 @@ namespace session_board {
 
             [[nodiscard]] luil::access_info accessibility() const override
             {
-                return { .role = luil::access_role::static_text, .name = name_ };
+                return { .role = luil::access_role::button, .name = name_ };
             }
 
         private:
@@ -1457,6 +1538,7 @@ namespace session_board {
         // 카드에 머무르면 옆에 세부 정보를 띄우고 떠나면 닫는다. 카드 id로 늦게 온 떠남을 가른다.
         void set_preview(luil::ui_element& card, const std::u8string& owner, const std::u8string& key, const std::u8string& surface)
         {
+            strip_tooltips(card);
             card.set_hover_dwell(luil::hover_dwell_target {
                 .delay = std::chrono::milliseconds { 450 },
                 .on_dwell = luil::make_message_action(preview_intent { .owner = owner, .key = key, .surface = surface, .open = true }),
@@ -1471,19 +1553,223 @@ namespace session_board {
         }
 
         // 카드의 바탕이다. 펼친 카드는 선택 바탕, 세부 정보를 띄운 카드는 키 컬러 테두리로 가른다.
-        luil::panel_config widget_card_surface(const bool expanded, const bool previewing)
+        //  - `alpha`가 1보다 작으면 카드 뒤로 창의 흐림 효과가 비친다 (아크릴 카드).
+        luil::panel_config widget_card_surface(const bool expanded, const bool previewing, const float alpha = 1.0f)
         {
             luil::panel_config surface {};
-            surface.background = [expanded](const luil::ui_color_palette& palette) { return expanded ? palette.row_selection_background : palette.surface_background; };
-            surface.corner_radius = 8.0f;
-            surface.border = [previewing](const luil::ui_color_palette& palette) { return previewing ? luil::with_alpha(palette.accent, 0.7f) : palette.divider; };
+            surface.background = [expanded, alpha](const luil::ui_color_palette& palette) {
+                const luil::ui_color color { expanded ? palette.row_selection_background : palette.surface_background };
+                return alpha < 1.0f ? luil::with_alpha(color, static_cast<float>(color >> 24U) / 255.0f * alpha) : color;
+            };
+            surface.corner_radius = widget_card_radius;
+            // 옅은 카드는 바탕만으로는 가장자리가 흐림에 묻힌다. 글자색으로 얇은 테를 둘러 카드 꼴을 지킨다. 옅을수록 진하다.
+            surface.border = [previewing, alpha](const luil::ui_color_palette& palette) {
+                if (previewing)
+                    return luil::with_alpha(palette.accent, 0.7f);
+                return alpha < 1.0f ? luil::with_alpha(palette.primary_foreground, 0.12f + 0.2f * (1.0f - alpha)) : palette.divider;
+            };
             return surface;
+        }
+
+        // 옅은 카드 위의 글·아이콘에 바탕색 후광을 두른다. 뒤가 밝은 창이거나 글자색과 비슷해도 글꼴의 윤곽이 남는다.
+        //  - 카드가 옅을수록(`strength`가 클수록) 후광이 진하다. 0이면 그대로 그린다.
+        //  - 후광색은 테마의 창 바탕색이라 다크에서는 어두운, 라이트에서는 밝은 테가 선다.
+        //  - 카드 바탕이 아니라 내용에만 건다. 바탕까지 감싸면 카드 둘레에 그림자가 진다.
+        class legible_scope final : public luil::ui_element
+        {
+        public:
+            legible_scope(const std::u8string& id, const float strength, std::unique_ptr<luil::ui_element> content)
+                : ui_element { luil::ui_element_id { kind_layout, id } }
+                , strength_ { std::clamp(strength, 0.0f, 1.0f) }
+            {
+                set_hit_opaque(false);
+                add_child(std::move(content));
+            }
+
+            void arrange(const luil::arrange_context& context) override
+            {
+                set_bounds(context.slot);
+                for (const auto& child : children())
+                    child->arrange(context.for_child(context.slot));
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot& interaction) const override
+            {
+                if (strength_ <= 0.0f)
+                {
+                    draw_children(context, interaction);
+                    return;
+                }
+                const float sigma { halo_sigma * context.scale };
+                SkPaint layer {};
+                layer.setImageFilter(SkImageFilters::DropShadow(0.0f, 0.0f, sigma, sigma, luil::with_alpha(context.palette.window_background, strength_), nullptr));
+                const luil::rect_f box { bounds() };
+                const SkRect area { SkRect::MakeXYWH(box.x, box.y, box.width, box.height).makeOutset(3.0f * sigma, 3.0f * sigma) };
+                context.canvas.saveLayer(&area, &layer);
+                draw_children(context, interaction);
+                context.canvas.restore();
+            }
+
+        private:
+            static constexpr float halo_sigma { 1.4f };
+            float strength_ { 0.0f };
+        };
+
+        // 상태 팝업·세부 정보의 색이다. 글리프와 라벨은 전경색으로 그리므로 전경색만 그 뜻의 색으로 바꾼다.
+        //  - 글자에는 채움용 키 컬러(`accent`)가 아니라 어두운 바탕에서도 읽히는 강조 글자색을 쓴다.
+        void warning_tint(luil::ui_color_palette& palette)
+        {
+            palette.primary_foreground = palette.warning_accent;
+        }
+
+        void error_tint(luil::ui_color_palette& palette)
+        {
+            palette.primary_foreground = palette.error_accent;
+        }
+
+        void accent_tint(luil::ui_color_palette& palette)
+        {
+            palette.primary_foreground = palette.accent;
+        }
+
+        void accent_text_tint(luil::ui_color_palette& palette)
+        {
+            palette.primary_foreground = palette.accent_emphasis_foreground;
+        }
+
+        // 세션이 지금 무엇을 말하는가다. 상태 팝업의 묶음·결과 줄 색과 세부 정보의 이유 상자가 이 하나로 갈린다.
+        enum class session_tone
+        {
+            attention,
+            failed,
+            running,
+            done,
+        };
+
+        session_tone tone_of(const session_snapshot& session, const std::int64_t now)
+        {
+            if (session.status == session_status::failed)
+                return session_tone::failed;
+            if (group_of(session, now) == session_group::attention)
+                return session_tone::attention;
+            if (widget_active(session))
+                return session_tone::running;
+            return session_tone::done;
+        }
+
+        using palette_tint = void (*)(luil::ui_color_palette&);
+
+        // 결과 줄·이유 상자의 글자색이다. 끝난 일은 흐린 글자 그대로라 물들이지 않는다.
+        palette_tint text_tint_of(const session_tone tone)
+        {
+            switch (tone)
+            {
+            case session_tone::attention:
+                return warning_tint;
+            case session_tone::failed:
+                return error_tint;
+            case session_tone::running:
+                return accent_text_tint;
+            case session_tone::done:
+                return nullptr;
+            }
+            return nullptr;
+        }
+
+        // 그 뜻의 바탕색이다. 이유 상자와 상태 팝업 카드의 테가 옅게 깐다.
+        luil::ui_color tone_color(const luil::ui_color_palette& palette, const session_tone tone)
+        {
+            switch (tone)
+            {
+            case session_tone::attention:
+                return palette.warning_accent;
+            case session_tone::failed:
+                return palette.error_accent;
+            case session_tone::running:
+                return palette.accent;
+            case session_tone::done:
+                return palette.primary_foreground;
+            }
+            return palette.primary_foreground;
+        }
+
+        // 글자 하나를 그 뜻의 색으로 물들인다. 물들일 색이 없으면 그대로 돌려준다.
+        std::unique_ptr<luil::ui_element> tinted(const std::u8string& id, const palette_tint tint, std::unique_ptr<luil::ui_element> content)
+        {
+            if (tint == nullptr)
+                return content;
+            return std::make_unique<palette_scope>(id, tint, std::move(content));
+        }
+
+        // 상태 팝업의 세션 카드다. 옅은 반투명 판에 얇은 테를 두르고, 포인터가 오르면 한 단 밝아진다.
+        //  - 세부 정보를 띄운 카드는 키 컬러 테로 어느 카드의 세부인지 잇는다.
+        //  - 액션이 없어도 hit를 받아 머무름·hover가 선다.
+        class status_card final : public luil::ui_element
+        {
+        public:
+            status_card(const std::u8string& id, const bool previewing, std::unique_ptr<luil::ui_element> content)
+                : ui_element { luil::ui_element_id { kind_layout, id } }
+                , previewing_ { previewing }
+            {
+                set_hit_opaque(true);
+                add_child(std::move(content));
+            }
+
+            void arrange(const luil::arrange_context& context) override
+            {
+                set_bounds(context.slot);
+                for (const auto& child : children())
+                    child->arrange(context.for_child(context.slot));
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot& interaction) const override
+            {
+                const luil::rect_f box { bounds() };
+                const float radius { corner_radius * context.scale };
+                const SkRect shape { SkRect::MakeXYWH(box.x, box.y, box.width, box.height) };
+                SkPaint fill { luil::solid_paint(luil::with_alpha(context.palette.primary_foreground, previewing_ ? 0.11f : 0.055f)) };
+                fill.setAntiAlias(true);
+                context.canvas.drawRRect(SkRRect::MakeRectXY(shape, radius, radius), fill);
+                if (!previewing_)
+                    luil::draw_hover_fill(context, box, id(), interaction, true, corner_radius);
+                SkPaint edge { luil::solid_paint(previewing_ ? luil::with_alpha(context.palette.accent, 0.7f) : luil::with_alpha(context.palette.primary_foreground, 0.08f)) };
+                edge.setStyle(SkPaint::kStroke_Style);
+                edge.setStrokeWidth(context.scale);
+                edge.setAntiAlias(true);
+                const SkRect inner { shape.makeInset(context.scale / 2.0f, context.scale / 2.0f) };
+                context.canvas.drawRRect(SkRRect::MakeRectXY(inner, radius - context.scale / 2.0f, radius - context.scale / 2.0f), edge);
+                draw_children(context, interaction);
+            }
+
+        private:
+            static constexpr float corner_radius { 6.0f };
+            bool previewing_ { false };
+        };
+
+        // 옅은 판 하나다. 세부 정보의 요청 상자·이유 상자가 쓴다. `border`가 0이면 테가 없다.
+        std::unique_ptr<luil::panel_element> soft_box(const std::u8string& id, const session_tone tone, const float fill, const float border, std::unique_ptr<luil::ui_element> content)
+        {
+            luil::panel_config config {};
+            config.background = [tone, fill](const luil::ui_color_palette& palette) { return luil::with_alpha(tone_color(palette, tone), fill); };
+            if (border > 0.0f)
+                config.border = [tone, border](const luil::ui_color_palette& palette) { return luil::with_alpha(tone_color(palette, tone), border); };
+            config.corner_radius = 6.0f;
+            auto result { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, id }, config) };
+            result->set_content(std::move(content));
+            result->set_hit_opaque(false);
+            return result;
+        }
+
+        // 카드 진하기에 맞춘 후광 세기다. 기본 진하기(55%) 근처는 거의 없고 0%에서 가장 진하다.
+        float halo_strength(const float alpha)
+        {
+            return alpha >= 1.0f ? 0.0f : std::clamp((0.7f - alpha) / 0.7f, 0.0f, 1.0f) * 0.95f;
         }
 
         // 위젯 카드 한 장이다: 상태·폴더·시각과 이동 단추, 작업 설명 두 줄, 진행 중이면 지금 하는 일.
         //  - 누르면 펼쳐 전체 설명과 모든 하위를 보이고, 머무르면 옆에 세부 정보를 띄운다.
         //  - 제품은 표식으로만 말한다. 이름은 읽기용 이름에 남긴다.
-        sized_element widget_row(const session_snapshot& session, const std::int64_t now, const float width, const bool expanded, const bool previewing)
+        sized_element widget_row(const session_snapshot& session, const std::int64_t now, const float width, const bool expanded, const bool previewing, const float alpha)
         {
             const std::u8string owner { widget_owner(session) };
             const std::u8string title { task_text(session) };
@@ -1520,8 +1806,8 @@ namespace session_board {
                 height += add_wrapped(*content, owner + u8"-folder", u8"작업 폴더 · " + (session.cwd.empty() ? u8"정보 없음" : u8(session.cwd)), inner_width, 11.0f, 8, luil::label_color_role::dim);
                 height += add_wrapped(*content, owner + u8"-identity", u8"세션 · " + u8(session.session_id), inner_width, 11.0f, 4, luil::label_color_role::dim);
             }
-            auto row { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, owner }, widget_card_surface(expanded, previewing)) };
-            row->set_content(std::move(content));
+            auto row { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, owner }, widget_card_surface(expanded, previewing, alpha)) };
+            row->set_content(std::make_unique<legible_scope>(owner + u8"-legible", halo_strength(alpha), std::move(content)));
             row->set_hit_opaque(true);
             row->set_cursor(luil::ui_cursor::hand);
             row->set_access_name(provider_text(session) + u8" · " + state_text(session, now) + u8" · " + title);
@@ -1622,6 +1908,7 @@ namespace session_board {
         , accent_id_ { appearance.accent_id }
         , backdrop_ { appearance.backdrop }
         , opacity_ { appearance.opacity }
+        , card_opacity_ { appearance.card_opacity }
         , detail_placement_file_ { std::move(detail_placement_file) }
         , appearance_file_ { std::move(appearance_file) }
         , saved_appearance_ { std::move(appearance) }
@@ -1632,6 +1919,8 @@ namespace session_board {
         auto style { std::make_shared<luil::ui_style>(luil::default_ui_style()) };
         style->dark.window_background = luil::with_alpha(style->dark.window_background, 0.0f);
         style->light.window_background = luil::with_alpha(style->light.window_background, 0.0f);
+        // 위젯 밖에 뜨는 판·알림·세부 정보는 카드처럼 크게 둥글린다. OS 기본은 메뉴 크기의 작은 둥글기다.
+        style->popup.corner = luil::popup_corner::round;
         style_ = std::move(style);
     }
 
@@ -1756,10 +2045,42 @@ namespace session_board {
         else if (const auto* preview { message.get<preview_intent>() }; preview != nullptr)
         {
             if (preview->open)
+            {
                 preview_ = *preview;
-            // 늦게 온 떠남이 다른 카드의 팝업을 닫지 않게 한다.
-            else if (preview_.owner == preview->owner)
+                preview_close_at_.reset();
+                preview_popup_hover_ = false;
+            }
+            // 늦게 온 떠남이 다른 카드의 팝업을 닫지 않게 한다. 팝업 안 단추를 누르러 옮겨 가는 사이는 기다린다.
+            else if (preview_.owner == preview->owner && !preview_popup_hover_)
+                preview_close_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds { 300 };
+        }
+        else if (const auto* preview_hover { message.get<preview_hover_intent>() }; preview_hover != nullptr)
+        {
+            preview_popup_hover_ = preview_hover->inside;
+            if (preview_hover->inside)
+                preview_close_at_.reset();
+            else if (!preview_.owner.empty())
+                preview_close_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds { 300 };
+            // 상태 팝업 카드의 세부 정보에 머무는 동안은 상태 팝업도 남긴다. 상태 팝업에서 나온 포인터가 세부 정보로 갔다.
+            if (preview_.surface == status_surface && panel_ == widget_panel::status)
+            {
+                hover_popup_ = preview_hover->inside;
+                if (preview_hover->inside)
+                    hover_close_at_.reset();
+                else if (!hover_trigger_)
+                    hover_close_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds { 300 };
+            }
+        }
+        else if (const auto* clear { message.get<clear_session_intent>() }; clear != nullptr)
+        {
+            if (const auto found { std::ranges::find_if(data_.sessions, [&](const auto& session) { return session_key(session) == clear->key; }) }; found != data_.sessions.end())
+                cleared_[clear->key] = latest_update(*found);
+            if (preview_.key == clear->key)
+            {
                 preview_ = {};
+                preview_close_at_.reset();
+                preview_popup_hover_ = false;
+            }
         }
         else if (const auto* filter { message.get<provider_intent>() }; filter != nullptr)
         {
@@ -1798,27 +2119,48 @@ namespace session_board {
             backdrop_ = backdrop->backdrop;
         else if (const auto* opacity { message.get<opacity_intent>() }; opacity != nullptr)
             opacity_ = std::clamp(opacity->value, 0.0f, 1.0f);
+        else if (const auto* card { message.get<card_opacity_intent>() }; card != nullptr)
+            card_opacity_ = std::clamp(card->relative ? card_opacity_ + card->value : card->value, 0.0f, 1.0f);
         // 판은 한 번에 하나만 뜬다. 닫힘은 지금 그 판이 떠 있을 때만 듣는다 — 늦게 온 닫힘이 새로 연 판을 닫지 않는다.
         else if (const auto* panel { message.get<widget_panel_intent>() }; panel != nullptr)
         {
+            const auto now { std::chrono::steady_clock::now() };
             if (panel->open)
-                panel_ = panel->panel;
-            else if (panel_ == panel->panel)
-                panel_ = widget_panel::none;
-            actions_close_at_.reset();
-        }
-        else if (const auto* hover { message.get<actions_hover_intent>() }; hover != nullptr)
-        {
-            (hover->popup ? actions_popup_hover_ : actions_trigger_hover_) = hover->inside;
-            if (hover->inside)
             {
-                actions_close_at_.reset();
-                // 머무름으로는 다른 판을 밀어내지 않는다. 설정을 고르다 지나친 포인터에 판이 바뀌면 안 된다.
-                if (!hover->popup && panel_ == widget_panel::none)
-                    panel_ = widget_panel::actions;
+                // 판을 연 단추를 눌러 닫은 누름이 뒤늦게 다시 열려는 것이면 듣지 않는다. 닫힘과 그 누름은 한 몸짓이라 사이가 짧다.
+                if (panel->panel != dismissed_panel_ || now - dismissed_at_ > std::chrono::milliseconds { 400 })
+                    panel_ = panel->panel;
             }
-            else if (panel_ == widget_panel::actions && !actions_trigger_hover_ && !actions_popup_hover_)
-                actions_close_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds { 300 };
+            else if (panel_ == panel->panel)
+            {
+                panel_ = widget_panel::none;
+                if (panel->dismissed)
+                {
+                    dismissed_panel_ = panel->panel;
+                    dismissed_at_ = now;
+                }
+            }
+            if (panel->open || !panel->dismissed)
+                dismissed_panel_ = widget_panel::none;
+            // 누름으로 연 판은 포인터가 떠나도 닫지 않는다. 머무름 표시는 새로 연 판의 것부터 다시 센다.
+            hover_trigger_ = false;
+            hover_popup_ = false;
+            hover_close_at_.reset();
+        }
+        else if (const auto* hover { message.get<panel_hover_intent>() }; hover != nullptr)
+        {
+            // 머무름으로는 다른 판을 밀어내지 않는다. 설정을 고르다 지나친 포인터에 판이 바뀌면 안 된다.
+            if (hover->inside && !hover->popup && panel_ == widget_panel::none)
+                panel_ = hover->panel;
+            // 다른 판의 늦은 들고 남은 지금 판의 닫힘을 정하지 않는다.
+            if (panel_ == hover->panel)
+            {
+                (hover->popup ? hover_popup_ : hover_trigger_) = hover->inside;
+                if (hover->inside)
+                    hover_close_at_.reset();
+                else if (!hover_trigger_ && !hover_popup_)
+                    hover_close_at_ = std::chrono::steady_clock::now() + std::chrono::milliseconds { 300 };
+            }
         }
         else if (const auto* placement { message.get<detail_placement_intent>() }; placement != nullptr)
         {
@@ -1842,7 +2184,7 @@ namespace session_board {
         }
         else if (const auto* scroll { message.get<scroll_intent>() }; scroll != nullptr)
         {
-            float& offset { scroll->updates ? update_scroll_ : scroll->detail ? detail_scroll_ : scroll_ };
+            float& offset { scroll->status ? status_scroll_ : scroll->updates ? update_scroll_ : scroll->detail ? detail_scroll_ : scroll_ };
             offset = std::max(0.0f, scroll->absolute ? scroll->value : offset + scroll->value);
         }
         else if (const auto* licenses { message.get<licenses_intent>() }; licenses != nullptr)
@@ -1888,18 +2230,28 @@ namespace session_board {
 
     std::optional<std::chrono::steady_clock::time_point> board_driver::next_tick()
     {
-        return actions_close_at_.has_value() ? std::min(next_tick_, *actions_close_at_) : next_tick_;
+        auto next { next_tick_ };
+        for (const auto& close : { hover_close_at_, preview_close_at_ })
+            if (close.has_value())
+                next = std::min(next, *close);
+        return next;
     }
 
     void board_driver::tick(const std::chrono::steady_clock::time_point now)
     {
-        if (actions_close_at_.has_value() && now >= *actions_close_at_)
+        if (hover_close_at_.has_value() && now >= *hover_close_at_)
         {
-            actions_close_at_.reset();
-            if (panel_ == widget_panel::actions && !actions_trigger_hover_ && !actions_popup_hover_)
+            hover_close_at_.reset();
+            if (!hover_trigger_ && !hover_popup_)
                 panel_ = widget_panel::none;
         }
-        // 모은 단추를 닫으려고 일찍 깬 것이면 세션은 다시 읽지 않는다.
+        if (preview_close_at_.has_value() && now >= *preview_close_at_)
+        {
+            preview_close_at_.reset();
+            if (!preview_popup_hover_)
+                preview_ = {};
+        }
+        // 머무른 판을 닫으려고 일찍 깬 것이면 세션은 다시 읽지 않는다.
         if (now < next_tick_)
             return;
         if (changes_ == INVALID_HANDLE_VALUE || codex_ != nullptr || claude_ != nullptr || antigravity_ != nullptr)
@@ -1922,7 +2274,7 @@ namespace session_board {
     {
         if (appearance_file_.empty())
             return;
-        const widget_appearance current { .theme = theme_, .accent_id = accent_id_, .backdrop = backdrop_, .opacity = opacity_ };
+        const widget_appearance current { .theme = theme_, .accent_id = accent_id_, .backdrop = backdrop_, .opacity = opacity_, .card_opacity = card_opacity_ };
         if (current == saved_appearance_)
             return;
         save_widget_appearance(appearance_file_, current);
@@ -1942,13 +2294,16 @@ namespace session_board {
         // 세부 정보 팝업의 자리는 카드를 그린 tree가 배치 뒤에 채운다.
         preview_top_.reset();
         actions_right_.reset();
+        status_left_.reset();
         frame->tree = std::make_shared<const luil::ui_tree>(make_widget_tree(now));
-        // 알림 판과 설정 판은 같은 자리에 선다. 사용자가 연 판이 앞선다.
+        // 알림 판과 머릿줄 판은 같은 자리에 선다. 사용자가 연 판이 앞선다.
         if (collapsed_ && !updates_.pending().empty() && panel_ == widget_panel::none)
             make_update_popup(*frame, now);
-        make_preview_popup(*frame, now);
         make_settings_popup(*frame);
         make_actions_popup(*frame);
+        make_status_popup(*frame, now);
+        // 세부 정보는 카드를 그린 표면(위젯·알림·상태 팝업)이 자리를 채운 뒤에 만든다.
+        make_preview_popup(*frame, now);
         if (detail_open_)
         {
             // 위젯으로 지켜보다가 자세히 볼 때 여는 독립 창이다. 작업 표시줄에 따로 선다.
@@ -2271,15 +2626,7 @@ namespace session_board {
         auto root { std::make_unique<luil::root_element>() };
         root->arrange({ { 0.0f, 0.0f, width, height }, scale });
 
-        // 정리한 끝난 세션은 그 뒤에 새 소식이 올 때까지 뺀다.
-        const auto cleared = [this](const session_snapshot& session) {
-            const auto found { cleared_.find(session_key(session)) };
-            return found != cleared_.end() && !widget_active(session) && latest_update(session) <= found->second;
-        };
-        std::vector<const session_snapshot*> visible {};
-        for (const auto& session : data_.sessions)
-            if (is_widget_visible(session, now) && !cleared(session))
-                visible.push_back(&session);
+        auto visible { widget_visible(now) };
         const auto active { [](const session_snapshot* session) { return widget_active(*session); } };
         std::ranges::stable_sort(visible, [&](const auto* left, const auto* right) { return active(left) > active(right); });
         const auto attention { std::ranges::count_if(visible, [now](const auto* session) { return group_of(*session, now) == session_group::attention; }) };
@@ -2301,39 +2648,58 @@ namespace session_board {
         caption->add_gap(4.0f);
         caption->add_flexible(label(u8"widget-title", u8"Session Board", 14.0f));
         // 확인·진행·완료·새 알림을 아이콘과 수로 줄여 보인다. 새 알림은 접힌 동안 쌓인 알림이다.
+        //  - 넷은 0이어도 늘 같은 자리에 흐리게 서서, 수가 바뀌어도 머릿줄이 흔들리지 않는다.
         const std::vector<header_count> counts {
             { u8"widget-count-attention", u8"확인", luil::codicons::icon_warning, static_cast<std::size_t>(attention) },
             { u8"widget-count-running", u8"진행", 0, static_cast<std::size_t>(running) },
-            { u8"widget-count-done", u8"완료", luil::codicons::icon_pass, static_cast<std::size_t>(std::ranges::count_if(visible, std::not_fn(active))) },
+            { u8"widget-count-done", u8"응답", luil::codicons::icon_comment, static_cast<std::size_t>(std::ranges::count_if(visible, std::not_fn(active))) },
             { u8"widget-count-alerts", u8"새 알림", luil::codicons::icon_bell_dot, updates_.pending().size() },
         };
-        const float counts_width { header_counts_width(counts) };
-        caption->add(std::make_unique<header_status>(counts), counts_width);
+        // 단추를 모을지는 표식 넷이 한 자리 수로 다 선 폭으로 정한다. 그보다 길어진 수는 제목을 줄여 들인다.
+        const float counts_width { std::max(header_counts_reserve, header_counts_width(counts)) };
+        auto status { std::make_unique<header_status>(counts) };
+        // 머무르거나 누르면 표식마다 센 세션을 보인다. 끌기 띠에서 빼야 머무름과 누름을 받는다.
+        status->set_hit_opaque(true);
+        status->set_caption_client(true);
+        status->set_action(luil::ui_trigger::left_click, luil::make_message_action(widget_panel_intent { widget_panel::status, panel_ != widget_panel::status }));
+        press_toggles(*status);
+        status->set_hover_dwell(luil::hover_dwell_target {
+            .delay = std::chrono::milliseconds { 250 },
+            .on_dwell = luil::make_message_action(panel_hover_intent { .panel = widget_panel::status, .popup = false, .inside = true }),
+            .on_end = luil::make_message_action(panel_hover_intent { .panel = widget_panel::status, .popup = false, .inside = false }),
+        });
+        const luil::ui_element* status_mark { status.get() };
+        caption->add(std::move(status), counts_width);
         caption->add_gap(4.0f);
         const auto add_button = [&](std::unique_ptr<luil::button_element> button) {
             button->set_caption_client(true);
             caption->add(std::move(button), { .length = widget_icon_button, .cross_length = widget_icon_button });
         };
-        // 단추가 제목과 상태 표식을 밀어낼 만큼 좁으면 닫기만 남기고 하나로 모은다. 모은 단추는 머무르거나 누르면 펼친다.
+        // 단추가 제목과 상태 표식을 밀어낼 만큼 좁으면 접기·닫기만 남기고 나머지를 하나로 모은다. 모은 단추는 머무르거나 누르면 펼친다.
         auto actions { widget_actions() };
-        const float fixed_width { 12.0f + 8.0f + 16.0f + 4.0f + header_title_minimum + counts_width + 4.0f };
+        const float fixed_width { 12.0f + 8.0f + 16.0f + 4.0f + header_title_minimum + header_counts_reserve + 4.0f };
         const auto header_width = [&](const std::size_t buttons) { return fixed_width + widget_icon_button * static_cast<float>(buttons) + header_spacing * static_cast<float>(buttons + 4); };
         const luil::ui_element* actions_trigger { nullptr };
-        if (inner_width >= header_width(actions.size() + 1))
+        if (inner_width >= header_width(actions.size() + 2))
             for (auto& button : actions)
                 add_button(std::move(button));
         else
         {
             const bool open { panel_ == widget_panel::actions };
             auto more { widget_button(u8"widget-more", u8"단추 더 보기", luil::codicons::icon_ellipsis, luil::make_message_action(widget_panel_intent { widget_panel::actions, !open }), open) };
+            press_toggles(*more);
             more->set_hover_dwell(luil::hover_dwell_target {
                 .delay = std::chrono::milliseconds { 150 },
-                .on_dwell = luil::make_message_action(actions_hover_intent { .popup = false, .inside = true }),
-                .on_end = luil::make_message_action(actions_hover_intent { .popup = false, .inside = false }),
+                .on_dwell = luil::make_message_action(panel_hover_intent { .panel = widget_panel::actions, .popup = false, .inside = true }),
+                .on_end = luil::make_message_action(panel_hover_intent { .panel = widget_panel::actions, .popup = false, .inside = false }),
             });
             actions_trigger = more.get();
             add_button(std::move(more));
         }
+        // 접기는 위젯의 첫 단추라 모으지 않는다.
+        const bool points_down { collapsed_ != metrics_.header_bottom };
+        add_button(widget_button(u8"widget-collapse", collapsed_ ? u8"목록 펼치기" : u8"목록 접기", points_down ? luil::codicons::icon_chevron_down : luil::codicons::icon_chevron_up,
+            command_action(toggle_collapse_command)));
         add_button(widget_button(u8"compact-close", u8"위젯 닫기", luil::codicons::icon_chrome_close, command_action(0)));
         // 모은 단추를 펼친 채 머릿줄이 넓어지면 단추가 제자리로 돌아온다. 보이지 않는 팝업이 알림 판을 막지 않게 닫는다.
         if (panel_ == widget_panel::actions && actions_trigger == nullptr)
@@ -2364,6 +2730,8 @@ namespace session_board {
                 content_height += block_height;
             };
             const float row_width { inner_width - 2.0f * widget_gap - 2.0f };
+            // 카드도 창의 흐림을 비춘다. 투명 배경은 흐리지 않아 뒤 글이 그대로 비치므로, 불투명은 비칠 것이 없으므로 그대로 칠한다.
+            const float card_alpha { cards_translucent() ? card_opacity_ : 1.0f };
             if (visible.empty())
             {
                 const luil::stack_config empty_config { .spacing = 4.0f, .padding = luil::edge_insets::all(16.0f), .main_alignment = luil::stack_main_alignment::center };
@@ -2392,13 +2760,13 @@ namespace session_board {
                 // 끝난 묶음은 정리 단추로 한꺼번에 치운다. 새 소식이 오면 그 세션은 다시 나타난다.
                 std::unique_ptr<luil::ui_element> clear {};
                 if (!current)
-                    clear = widget_button(u8"widget-clear-completed", u8"완료 목록 정리", luil::codicons::icon_clear_all, luil::make_message_action(clear_completed_intent {}));
-                add_block(widget_group_heading(group_id, current ? u8"진행 중 · 대기" : u8"최근 완료 · 종료", members.size(), current ? u8"" : u8"15분간 유지", std::move(clear)), widget_group_header);
+                    clear = widget_button(u8"widget-clear-completed", u8"최근 응답 · 종료 목록 정리", luil::codicons::icon_clear_all, luil::make_message_action(clear_completed_intent {}));
+                add_block(widget_group_heading(group_id, current ? u8"진행 중 · 대기" : u8"최근 응답 · 종료", members.size(), current ? u8"" : u8"15분간 유지", std::move(clear)), widget_group_header);
                 for (const auto* session : members)
                 {
                     const auto owner { widget_owner(*session) };
                     const bool previewing { preview_.surface.empty() && preview_.owner == owner };
-                    auto row { widget_row(*session, now, row_width, expanded_session_ == owner, previewing) };
+                    auto row { widget_row(*session, now, row_width, expanded_session_ == owner, previewing, card_alpha) };
                     if (previewing)
                         preview_card = row.element.get();
                     add_block(std::move(row.element), row.height);
@@ -2479,6 +2847,7 @@ namespace session_board {
             preview_top_ = preview_card->bounds().y / scale;
         if (actions_trigger != nullptr)
             actions_right_ = (actions_trigger->bounds().x + actions_trigger->bounds().width) / scale;
+        status_left_ = status_mark->bounds().x / scale;
         root->add(std::move(content));
         if (!collapsed_)
         {
@@ -2494,27 +2863,36 @@ namespace session_board {
 
     void board_driver::make_update_popup(luil::ui_frame& frame, const std::int64_t now)
     {
-        constexpr float row_height { 104.0f };
         constexpr float heading_height { 32.0f };
         constexpr float gap { 6.0f };
+        constexpr float card_padding { 8.0f };
+        constexpr float line_spacing { 4.0f };
+        constexpr float text_height { 18.0f };
+        constexpr float note_height { 16.0f };
         const float scale { metrics_.scale > 0.0f ? metrics_.scale : 1.0f };
         const float width { metrics_.width / scale };
         const auto count { updates_.pending().size() };
-        // 세 장까지 펼쳐 보이고 그 넘게는 흘린다. 카드마다 아래 간격이 붙는다.
-        const float height { std::min(heading_height + (row_height + gap) * static_cast<float>(std::min<std::size_t>(3, count)), metrics_.notification_room / scale - gap) };
-        if (width <= 0.0f || height < heading_height + 24.0f)
-            return;
         const luil::stack_config rows_config { .spacing = gap, .padding = { gap, 0.0f, gap, gap } };
         auto rows { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"update-rows" }, rows_config) };
         const luil::ui_element* preview_card { nullptr };
+        // 카드 높이는 덧붙일 줄이 있는지에 따라 다르다. 앞의 세 장까지 펼쳐 보이고 그 넘게는 흘린다.
+        float content_height { 0.0f };
+        float shown_height { 0.0f };
+        std::size_t index { 0 };
         for (const auto& update : updates_.pending())
         {
             const auto& session { update.session };
             const auto id { u8"update-" + u8(std::to_string(update.sequence)) };
             const acknowledge_update_intent acknowledgement { session.provider, session.session_id, update.sequence };
-            auto body { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-body" }, luil::stack_config { .spacing = 4.0f, .padding = { 12.0f, 8.0f, 8.0f, 8.0f } }) };
-            const luil::stack_config heading_config { .direction = luil::stack_direction::row, .spacing = 6.0f, .cross_alignment = luil::stack_alignment::center };
+            auto body { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-body" }, luil::stack_config { .spacing = line_spacing, .padding = { 12.0f, card_padding, 8.0f, card_padding } }) };
+            // 머리 줄: 상태가 맨 앞이고 그 옆에 제품 표식과 프로젝트, 오른쪽에 시각과 단추다.
+            //  - 응답이 처리된 알림은 세션의 지금 상태보다 처리됐다는 사실이 소식이다.
+            const luil::stack_config heading_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
             auto heading { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-heading" }, heading_config) };
+            if (update.response_required || update.completed)
+                heading->add_fit(status_inline(id + u8"-status", session, now));
+            else
+                heading->add_fit(label(id + u8"-status", u8"응답 처리됨", 11.0f, luil::label_color_role::dim));
             heading->add_flexible(provider_line(id + u8"-project", session.provider, project_text(session), 11.0f));
             heading->add_fit(label(id + u8"-age", age_text(latest_update(session), now), 11.0f, luil::label_color_role::dim));
             // 목록을 접어 둔 채로도 알린 세션으로 바로 갈 수 있어야 한다. 갈 수 있는지는 지금 목록의 세션으로 판단한다(창 정보는 Hook이 나중에 채운다).
@@ -2525,29 +2903,32 @@ namespace session_board {
             focus->set_enabled(can_focus(target));
             heading->add(std::move(focus), { .length = widget_icon_button, .cross_length = widget_icon_button });
             // 확인 단추는 체크 표식 하나다. 응답을 기다리는 알림은 세션에서 답해야 사라지므로 누를 수 없다.
-            const std::u8string confirm_tip { update.response_required ? u8"세션에서 승인하거나 응답하면 잠시 뒤 자동으로 숨깁니다"
-                    : update.completed                                 ? u8"끝난 작업 알림을 숨깁니다"
-                                                                       : u8"응답이 처리된 알림을 숨깁니다" };
+            //  - 묻고 끝난 응답은 답하지 않기로 할 수 있어 숨길 수 있다. 숨긴 그 응답은 새 요청이 오기 전까지 다시 띄우지 않는다.
+            const bool reply { update.response_required && awaits_reply(session) };
+            const std::u8string confirm_tip { reply           ? u8"답하지 않고 알림을 숨깁니다 — 새 요청이 오기 전까지 다시 띄우지 않습니다"
+                    : update.response_required ? u8"세션에서 승인하거나 응답하면 잠시 뒤 자동으로 숨깁니다"
+                    : update.completed         ? u8"끝난 작업 알림을 숨깁니다"
+                                               : u8"응답이 처리된 알림을 숨깁니다" };
             auto confirm { widget_button(id + u8"-confirm", confirm_tip, luil::codicons::icon_check, luil::make_message_action(acknowledgement)) };
-            confirm->set_access_name(update.response_required ? u8"응답 대기" : u8"닫기");
-            confirm->set_enabled(!update.response_required);
+            confirm->set_access_name(update.response_required && !reply ? u8"응답 대기" : u8"닫기");
+            confirm->set_enabled(!update.response_required || reply);
             heading->add(std::move(confirm), { .length = widget_icon_button, .cross_length = widget_icon_button });
             body->add(std::move(heading), widget_icon_button);
-            // 끝난 작업은 무엇을 요청했는지가 먼저다. 요청 발췌문이 있으면 그것을, 결과 문장은 아랫줄에 둔다.
-            //  - 오류로 멈췄으면 결과 문장보다 원인이 중요하다.
+            // 끝난 작업은 무엇을 요청했는지가 먼저다. 요청 발췌문이 있으면 그것을 본문에, 결과 문장은 아랫줄에 둔다.
             const bool request { update.completed && !session.title.empty() };
             const std::u8string text { request ? u8(session.title) : task_text(session) };
-            body->add(label(id + u8"-text", text, 12.0f), 18.0f);
-            if (update.response_required || update.completed)
-                body->add(status_cell(id + u8"-status", session, now), 18.0f);
-            else
-                body->add(label(id + u8"-status", u8"응답 처리됨", 11.0f, luil::label_color_role::dim), 18.0f);
-            std::u8string activity { u8"잠시 후 알림을 숨깁니다" };
-            if (update.response_required)
-                activity = activity_text(session, now);
-            else if (update.completed)
-                activity = request && !session.summary.empty() && session.status != session_status::failed ? u8(session.summary) : activity_text(session, now);
-            body->add(label(id + u8"-activity", activity, 11.0f, luil::label_color_role::dim), 16.0f);
+            body->add(label(id + u8"-text", text, 12.0f), text_height);
+            // 덧붙일 줄은 머리의 상태와 본문이 말하지 않은 것만이다: 기다리는 까닭, 오류의 원인, 요청 아래의 결과.
+            std::u8string note {};
+            //  - 묻고 끝난 응답은 본문이 그 물음이라 덧붙일 까닭이 없다.
+            if ((update.response_required && !reply) || session.status == session_status::failed)
+                note = activity_text(session, now);
+            else if (request && !session.summary.empty())
+                note = u8(session.summary);
+            const bool has_note { !note.empty() && note != text && note != state_text(session, now) };
+            if (has_note)
+                body->add(label(id + u8"-activity", note, 11.0f, luil::label_color_role::dim), note_height);
+            const float card_height { 2.0f * card_padding + widget_icon_button + line_spacing + text_height + (has_note ? line_spacing + note_height : 0.0f) };
             const bool previewing { preview_.surface == update_surface && preview_.owner == id };
             auto card { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, id }, widget_card_surface(false, previewing)) };
             card->set_content(std::move(body));
@@ -2556,9 +2937,14 @@ namespace session_board {
             set_preview(*card, id, session_key(session), std::u8string { update_surface });
             if (previewing)
                 preview_card = card.get();
-            rows->add(std::move(card), row_height);
+            rows->add(std::move(card), card_height);
+            content_height += card_height + gap;
+            if (index++ < 3)
+                shown_height += card_height + gap;
         }
-        const float content_height { (row_height + gap) * static_cast<float>(count) };
+        const float height { std::min(heading_height + shown_height, metrics_.notification_room / scale - gap) };
+        if (width <= 0.0f || height < heading_height + 24.0f)
+            return;
         luil::scroll_area_element* scroll_metrics { nullptr };
         auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"update-content" }, luil::stack_config {}) };
         const luil::stack_config heading_config {
@@ -2618,10 +3004,12 @@ namespace session_board {
 
     void board_driver::make_preview_popup(luil::ui_frame& frame, const std::int64_t now)
     {
-        constexpr float preview_width { 320.0f };
+        constexpr float preview_width { 380.0f };
         constexpr float gap { 8.0f };
-        constexpr float inset { 14.0f };
-        constexpr float key_width { 52.0f };
+        constexpr float inset { 16.0f };
+        constexpr float spacing { 12.0f };
+        constexpr float key_width { 44.0f };
+        constexpr float box_padding { 10.0f };
         if (preview_.owner.empty() || !preview_top_.has_value())
             return;
         // 알림 카드의 세션은 목록에서 빠졌을 수 있다. 그때는 알림이 든 마지막 모습을 보인다.
@@ -2632,74 +3020,205 @@ namespace session_board {
             session = &pending->session;
         if (session == nullptr)
             return;
-        // 위젯을 덮지 않는 쪽에 둔다. 덮으면 카드에서 떠난 것이 되어 팝업이 닫혔다 열리기를 되풀이한다.
+        // 카드가 놓인 표면을 덮지 않는 쪽에 둔다. 덮으면 카드에서 떠난 것이 되어 팝업이 닫혔다 열리기를 되풀이한다.
+        //  - 위젯과 알림 판의 카드는 위젯 밖 왼쪽(없으면 오른쪽)이다.
+        //  - 상태 팝업은 위젯 밖으로 비켜 서 있으므로 그 팝업 옆에 붙인다. 위젯 옆에 두면 상태 팝업과 겹친다.
         const float scale { metrics_.scale > 0.0f ? metrics_.scale : 1.0f };
         const float need { (preview_width + gap) * scale };
+        const float surface_width { metrics_.width / scale };
         float x { 0.0f };
-        if (metrics_.room_left >= need)
+        if (preview_.surface == status_surface)
+        {
+            const float right { metrics_.room_right + (surface_width - status_popup_x_ - status_popup_width_) * scale };
+            const float left { metrics_.room_left + status_popup_x_ * scale };
+            if (right >= need)
+                x = status_popup_width_ + gap;
+            else if (left >= need)
+                x = -(preview_width + gap);
+            else
+                return;
+        }
+        else if (metrics_.room_left >= need)
             x = -(preview_width + gap);
         else if (metrics_.room_right >= need)
-            x = metrics_.width / scale + gap;
+            x = surface_width + gap;
         else
             return;
 
+        const session_tone tone { tone_of(*session, now) };
         const float text_width { preview_width - 2.0f * inset };
-        const luil::stack_config content_config { .padding = luil::edge_insets::all(inset) };
+        const luil::stack_config content_config { .spacing = spacing, .padding = luil::edge_insets::all(inset) };
         auto content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-content" }, content_config) };
         float height { 2.0f * inset };
-        const luil::stack_config top_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
-        auto top { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-top" }, top_config) };
-        top->add_flexible(provider_line(u8"preview-source", session->provider, project_text(*session), 11.0f));
-        top->add_fit(label(u8"preview-age", age_text(latest_update(*session), now), 11.0f, luil::label_color_role::dim));
-        content->add(std::move(top), 18.0f);
-        content->add_gap(4.0f);
-        content->add(status_cell(u8"preview-status", *session, now), 20.0f);
-        height += 18.0f + 4.0f + 20.0f;
-        // 요청과 그 결과(또는 진행 중인 설명)를 함께 본다. 카드는 둘 중 하나만 짧게 보인다.
-        const auto add_section = [&](const std::u8string& id, const std::u8string& name, const std::u8string& text, const std::size_t lines) {
-            if (text.empty())
-                return;
-            content->add_gap(10.0f);
-            content->add(label(id + u8"-name", name, 11.0f, luil::label_color_role::dim), 16.0f);
-            height += 10.0f + 16.0f + add_wrapped(*content, id, text, text_width, 12.0f, lines);
+        const auto add = [&](std::unique_ptr<luil::ui_element> element, const float length) {
+            if (height > 2.0f * inset)
+                height += spacing;
+            content->add(std::move(element), length);
+            height += length;
         };
-        add_section(u8"preview-request", u8"요청", u8(session->title), 4);
-        add_section(u8"preview-summary", is_working(session->status) ? u8"진행" : u8"결과", u8(session->summary), 6);
-        if (activity_adds(*session, now))
-        {
-            content->add_gap(4.0f);
-            height += 4.0f + add_wrapped(*content, u8"preview-activity", activity_text(*session, now), text_width, 11.0f, 2, luil::label_color_role::dim);
-        }
-        height += add_widget_children(*content, *session, u8"preview", now, true);
-        // 어디서 무엇으로 도는 세션인지다. 이름이 왼쪽, 값이 오른쪽에 줄을 맞춘다.
-        content->add_gap(10.0f);
-        content->add(divider(u8"preview-rule"), 1.0f);
-        content->add_gap(8.0f);
-        height += 19.0f;
-        std::vector<std::pair<std::u8string, std::u8string>> facts {};
+        // 이름 붙은 한 덩이다: 흐린 이름 한 줄 아래 내용. 이름과 내용 사이는 덩이 사이보다 좁다.
+        const auto section = [&](const std::u8string& id, const std::u8string& name, std::unique_ptr<luil::ui_element> body, const float body_height) {
+            auto block { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-block" }, luil::stack_config { .spacing = 4.0f }) };
+            block->add(label(id + u8"-name", name, 11.0f, luil::label_color_role::dim), 16.0f);
+            block->add(std::move(body), body_height);
+            add(std::move(block), 16.0f + 4.0f + body_height);
+        };
+        const auto wrapped = [&](const std::u8string& id, const std::u8string& text, const float width, const std::size_t lines, std::unique_ptr<luil::stack_element>& out) {
+            out = std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-lines" }, luil::stack_config {});
+            return add_wrapped(*out, id, text, width, 12.0f, lines);
+        };
+
+        // 머리: 제품 표식 칸, 폴더 이름과 경로, 시각.
+        const luil::stack_config header_config { .direction = luil::stack_direction::row, .spacing = 10.0f, .cross_alignment = luil::stack_alignment::center };
+        auto header { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-header" }, header_config) };
+        const luil::stack_config mark_config { .padding = luil::edge_insets::all(8.0f) };
+        auto mark_body { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-mark-body" }, mark_config) };
+        mark_body->add(std::make_unique<provider_mark>(u8"preview-mark", session->provider), 16.0f);
+        luil::panel_config mark_surface {};
+        mark_surface.background = [](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.primary_foreground, 0.07f); };
+        mark_surface.corner_radius = 8.0f;
+        auto mark { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"preview-mark-surface" }, mark_surface) };
+        mark->set_content(std::move(mark_body));
+        mark->set_hit_opaque(false);
+        header->add(std::move(mark), { .length = 32.0f, .cross_length = 32.0f });
+        auto names { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-names" }, luil::stack_config { .spacing = 2.0f }) };
+        names->add(label(u8"preview-source", project_text(*session), 13.0f), 18.0f);
+        names->add(label(u8"preview-path", session->cwd.empty() ? u8"폴더 정보 없음" : u8(session->cwd), 11.0f, luil::label_color_role::dim), 16.0f);
+        header->add_flexible(std::move(names));
+        header->add_fit(label(u8"preview-age", age_text(latest_update(*session), now), 11.0f, luil::label_color_role::dim));
+        add(std::move(header), 36.0f);
+
+        // 상태: 상태 칸(경고·오류는 배지, 작업 중은 도는 표시)과 대화 이름.
+        const luil::stack_config state_config { .direction = luil::stack_direction::row, .spacing = 10.0f, .cross_alignment = luil::stack_alignment::center };
+        auto state { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-state" }, state_config) };
+        state->add(status_cell(u8"preview-status", *session, now), 132.0f);
         if (!session->name.empty())
-            facts.emplace_back(u8"대화", u8(session->name));
-        facts.emplace_back(u8"폴더", session->cwd.empty() ? u8"정보 없음" : u8(session->cwd));
-        if (!session->model.empty())
-            facts.emplace_back(u8"모델", u8(session->model));
-        if (!session->observation_source.empty())
-            facts.emplace_back(u8"수집", source_text(*session));
-        facts.emplace_back(u8"세션", u8(session->session_id));
-        for (std::size_t index { 0 }; index < facts.size(); ++index)
+            state->add_flexible(label(u8"preview-conversation", u8"대화 · " + u8(session->name), 11.0f, luil::label_color_role::dim));
+        else
+            state->add_flexible_gap();
+        add(std::move(state), 22.0f);
+
+        // 확인할 일은 왜 멈췄는지가 먼저다. 그 뜻의 색으로 옅게 칠한 상자에 담는다.
+        if (tone == session_tone::attention || tone == session_tone::failed)
         {
-            const auto& [name, value] { facts[index] };
-            const std::u8string id { u8"preview-fact-" + u8(std::to_string(index)) };
-            const luil::stack_config row_config { .direction = luil::stack_direction::row };
-            auto row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-row" }, row_config) };
-            row->add(label(id + u8"-name", name, 11.0f, luil::label_color_role::dim), key_width);
-            auto values { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-values" }, luil::stack_config {}) };
-            const float row_height { add_wrapped(*values, id, value, text_width - key_width, 11.0f, 3) };
-            row->add_flexible(std::move(values));
-            content->add(std::move(row), row_height);
-            height += row_height;
+            std::u8string title { u8"세션 상태를 확인해야 합니다" };
+            if (session->status == session_status::waiting_approval)
+                title = u8"세션에서 승인해야 합니다";
+            else if (session->status == session_status::waiting_input)
+                title = u8"세션에서 답해야 합니다";
+            else if (session->status == session_status::failed)
+                title = u8"오류로 멈췄습니다";
+            else if (!own_attention(*session, now))
+                title = u8"하위 작업이 기다립니다";
+            else if (needs_attention(*session, now))
+                title = u8"오래 소식이 없습니다";
+            const luil::stack_config reason_config { .spacing = 3.0f, .padding = { box_padding, 8.0f, box_padding, 8.0f } };
+            auto reason { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-reason" }, reason_config) };
+            reason->add(tinted(u8"preview-reason-tint", text_tint_of(tone), label(u8"preview-reason-title", title, 11.0f)), 16.0f);
+            float reason_height { 16.0f + 16.0f + 3.0f };
+            reason_height += add_wrapped(*reason, u8"preview-reason-text", activity_text(*session, now), text_width - 2.0f * box_padding, 12.0f, 3);
+            add(soft_box(u8"preview-reason-box", tone, 0.12f, 0.35f, std::move(reason)), reason_height);
+        }
+
+        // 요청: 무엇을 시켰는지다. 옅은 상자에 인용처럼 담는다.
+        if (!session->title.empty())
+        {
+            const luil::stack_config request_config { .padding = { box_padding, 8.0f, box_padding, 8.0f } };
+            auto request { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-request-box-body" }, request_config) };
+            const float request_height { 16.0f + add_wrapped(*request, u8"preview-request", u8(session->title), text_width - 2.0f * box_padding, 12.0f, 4) };
+            section(u8"preview-request", u8"요청", soft_box(u8"preview-request-box", session_tone::done, 0.05f, 0.0f, std::move(request)), request_height);
+        }
+
+        // 결과 또는 지금 하는 일이다. 일하는 중이면 지금 무엇을 하는지가, 끝났으면 무엇을 했는지가 궁금하다.
+        {
+            const bool working { tone == session_tone::running };
+            const std::u8string text { working ? activity_text(*session, now) : u8(session->summary) };
+            if (!text.empty())
+            {
+                std::unique_ptr<luil::stack_element> body {};
+                const float body_height { wrapped(u8"preview-summary", text, text_width, working ? 3 : 5, body) };
+                section(u8"preview-summary", working ? u8"지금" : u8"결과", std::move(body), body_height);
+            }
+            if (working && !session->summary.empty())
+            {
+                std::unique_ptr<luil::stack_element> body {};
+                const float body_height { wrapped(u8"preview-progress", u8(session->summary), text_width, 3, body) };
+                section(u8"preview-progress", u8"진행", std::move(body), body_height);
+            }
+        }
+
+        // 하위 작업: 위젯 카드를 펼친 것과 같은 줄이다.
+        if (!session->children.empty())
+        {
+            auto children { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-children-body" }, luil::stack_config {}) };
+            const float children_height { add_widget_children(*children, *session, u8"preview", now, true) };
+            add(std::move(children), children_height);
+        }
+
+        add(divider(u8"preview-rule"), 1.0f);
+
+        // 어디서 무엇으로 도는 세션인지다. 이름이 왼쪽, 값이 오른쪽에 줄을 맞춘다. 폴더는 머리에 있다.
+        {
+            std::vector<std::pair<std::u8string, std::u8string>> facts {};
+            if (!session->model.empty())
+                facts.emplace_back(u8"모델", u8(session->model));
+            if (!session->observation_source.empty())
+                facts.emplace_back(u8"수집", source_text(*session));
+            facts.emplace_back(u8"세션", u8(session->session_id));
+            const luil::stack_config facts_config { .spacing = 2.0f };
+            auto rows { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-facts" }, facts_config) };
+            for (std::size_t index { 0 }; index < facts.size(); ++index)
+            {
+                const auto& [name, value] { facts[index] };
+                const std::u8string id { u8"preview-fact-" + u8(std::to_string(index)) };
+                const luil::stack_config row_config { .direction = luil::stack_direction::row, .spacing = 8.0f };
+                auto row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, id + u8"-row" }, row_config) };
+                row->add(label(id + u8"-name", name, 11.0f, luil::label_color_role::dim), key_width);
+                row->add_flexible(label(id, value, 11.0f));
+                rows->add(std::move(row), 16.0f);
+            }
+            add(std::move(rows), 16.0f * static_cast<float>(facts.size()) + 2.0f * static_cast<float>(facts.size() - 1));
+        }
+
+        // 동작: 세션 창으로 가기가 주 동작이다. 답해야 하는 세션이면 그 말로 부른다. 끝난 세션은 목록에서 치울 수 있다.
+        {
+            const luil::stack_config actions_config { .direction = luil::stack_direction::row, .spacing = 6.0f, .cross_alignment = luil::stack_alignment::center };
+            auto actions { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"preview-actions" }, actions_config) };
+            const bool answer { session->status == session_status::waiting_approval || session->status == session_status::waiting_input };
+            const luil::text_button_config focus_config {
+                .text = answer ? (session->status == session_status::waiting_approval ? u8"승인하러 가기" : u8"답하러 가기") : u8"세션 창으로 이동",
+                .visual = luil::text_button_visual::accent,
+                .glyph = luil::codicons::icon_link_external,
+            };
+            auto focus { std::make_unique<luil::text_button_element>(luil::ui_element_id { kind_button, u8"preview-focus" }, focus_config) };
+            focus->set_cursor(luil::ui_cursor::hand);
+            focus->set_tooltip(focus_tooltip(*session, provider_text(*session) + u8" 세션 창으로 이동"));
+            focus->set_enabled(can_focus(*session));
+            focus->set_action(luil::ui_trigger::left_click, luil::make_message_action(focus_session_intent { session_key(*session) }));
+            actions->add_fit(std::move(focus));
+            if (!session->cwd.empty())
+            {
+                const luil::text_button_config open_config { .text = u8"폴더 열기", .glyph = luil::codicons::icon_folder_opened };
+                auto open { std::make_unique<luil::text_button_element>(luil::ui_element_id { kind_button, u8"preview-open-folder" }, open_config) };
+                open->set_cursor(luil::ui_cursor::hand);
+                open->set_tooltip(u8"탐색기에서 작업 폴더를 엽니다");
+                open->set_action(luil::ui_trigger::left_click, luil::make_message_action(open_folder_intent { u8(session->cwd) }));
+                actions->add_fit(std::move(open));
+            }
+            actions->add_flexible_gap();
+            if (tone == session_tone::done)
+                actions->add(widget_button(u8"preview-clear", u8"목록에서 치우기 — 새 소식이 오면 다시 보입니다", luil::codicons::icon_check,
+                                 luil::make_message_action(clear_session_intent { session_key(*session) })),
+                    { .length = 28.0f, .cross_length = 28.0f });
+            add(std::move(actions), 28.0f);
         }
 
         auto background { std::make_unique<popup_backing>(u8"preview-background", std::move(content)) };
+        // 단추를 누르러 카드에서 이 팝업으로 옮겨 오는 동안 닫지 않는다.
+        background->set_hover_region(luil::hover_region_target {
+            .on_enter = [] { return luil::make_app_action(preview_hover_intent { true }); },
+            .on_leave = [] { return luil::make_app_action(preview_hover_intent { false }); },
+        });
         auto root { std::make_unique<luil::root_element>() };
         root->arrange({ { 0.0f, 0.0f, preview_width * scale, height * scale }, scale });
         background->arrange({ { 0.0f, 0.0f, preview_width * scale, height * scale }, scale });
@@ -2716,6 +3235,220 @@ namespace session_board {
         frame.popups.push_back(std::move(popup));
     }
 
+    bool board_driver::cards_translucent() const noexcept
+    {
+        return !fully_opaque(opacity_) && backdrop_ != widget_backdrop::transparent;
+    }
+
+    std::vector<const session_snapshot*> board_driver::widget_visible(const std::int64_t now) const
+    {
+        // 정리한 끝난 세션은 그 뒤에 새 소식이 올 때까지 뺀다.
+        const auto cleared = [this](const session_snapshot& session) {
+            const auto found { cleared_.find(session_key(session)) };
+            return found != cleared_.end() && !widget_active(session) && latest_update(session) <= found->second;
+        };
+        std::vector<const session_snapshot*> visible {};
+        for (const auto& session : data_.sessions)
+            if (is_widget_visible(session, now) && !cleared(session))
+                visible.push_back(&session);
+        return visible;
+    }
+
+    void board_driver::make_status_popup(luil::ui_frame& frame, const std::int64_t now)
+    {
+        constexpr float popup_width { 360.0f };
+        constexpr float inset { 10.0f };
+        constexpr float spacing { 6.0f };
+        constexpr float heading_height { 24.0f };
+        constexpr float card_height { 74.0f };
+        constexpr float more_height { 26.0f };
+        constexpr float empty_height { 48.0f };
+        constexpr float maximum_height { 560.0f };
+        if (panel_ != widget_panel::status || !status_left_.has_value())
+            return;
+        const auto visible { widget_visible(now) };
+        std::vector<const session_snapshot*> attention {};
+        std::vector<const session_snapshot*> running {};
+        std::vector<const session_snapshot*> done {};
+        // 머릿줄 표식과 같은 규칙으로 센다. 오류로 끝난 세션은 확인과 완료 양쪽에 든다.
+        for (const auto* session : visible)
+        {
+            if (const auto group { group_of(*session, now) }; group == session_group::attention)
+                attention.push_back(session);
+            else if (group == session_group::running)
+                running.push_back(session);
+            if (!widget_active(*session))
+                done.push_back(session);
+        }
+        // 새 알림 가운데 이미 확인 필요에 든 세션은 빼서 같은 카드가 두 번 서지 않게 한다.
+        std::vector<const session_snapshot*> alerts {};
+        for (const auto& update : updates_.pending())
+            if (std::ranges::none_of(attention, [&](const auto* session) { return session_key(*session) == session_key(update.session); }))
+                alerts.push_back(&update.session);
+
+        // 묶음 하나다. 확인할 일이 먼저고, 새 알림은 접힌 동안만 쌓이므로 그때만 보인다.
+        struct status_section
+        {
+            std::u8string id {};
+            std::u8string name {};
+            // 0이면 작업 중 회전 표시다.
+            char32_t glyph { 0 };
+            palette_tint tint { nullptr };
+            const std::vector<const session_snapshot*>* sessions { nullptr };
+            // 이만큼만 카드로 보이고 나머지는 상세 화면으로 넘긴다.
+            std::size_t shown { 3 };
+            bool clear { false };
+        };
+        const std::array<status_section, 4> sections { {
+            { u8"status-attention", u8"확인 필요", luil::codicons::icon_warning, warning_tint, &attention, 3, false },
+            { u8"status-alerts", u8"새 알림", luil::codicons::icon_bell_dot, accent_tint, &alerts, 2, false },
+            { u8"status-running", u8"진행 중", 0, accent_tint, &running, 3, false },
+            { u8"status-done", u8"최근 응답 · 종료", luil::codicons::icon_comment, nullptr, &done, 2, true },
+        } };
+
+        auto list { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"status-list" }, luil::stack_config { .spacing = spacing }) };
+        float content_height { 0.0f };
+        const auto add = [&](std::unique_ptr<luil::ui_element> element, const float length) {
+            if (content_height > 0.0f)
+                content_height += spacing;
+            list->add(std::move(element), length);
+            content_height += length;
+        };
+        // 세부 정보를 띄운 카드다. 배치 뒤에 그 자리로 팝업을 맞춘다.
+        const luil::ui_element* preview_card { nullptr };
+        for (const auto& section : sections)
+        {
+            const auto& sessions { *section.sessions };
+            if (sessions.empty() || (section.id == u8"status-alerts" && !collapsed_))
+                continue;
+            // 묶음 머리: 그 뜻의 색으로 물든 표식, 이름, 수. 끝난 묶음은 한꺼번에 치운다.
+            const luil::stack_config heading_config { .direction = luil::stack_direction::row, .spacing = 6.0f, .padding = { 4.0f, 0.0f, 0.0f, 0.0f }, .cross_alignment = luil::stack_alignment::center };
+            auto heading { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, section.id + u8"-heading" }, heading_config) };
+            std::unique_ptr<luil::ui_element> mark {};
+            if (section.glyph == 0)
+                mark = std::make_unique<luil::spinner_element>(luil::ui_element_id { kind_layout, section.id + u8"-mark" }, luil::spinner_config { .size = 13.0f });
+            else
+                mark = std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_layout, section.id + u8"-mark" }, luil::glyph_config { .glyph = section.glyph, .font_size = 13.0f });
+            mark->set_hit_opaque(false);
+            heading->add(tinted(section.id + u8"-mark-tint", section.tint, std::move(mark)), { .length = 13.0f, .cross_length = 13.0f });
+            heading->add_fit(label(section.id + u8"-name", section.name, 12.0f));
+            heading->add_flexible(label(section.id + u8"-count", u8(std::to_string(sessions.size())), 11.0f, luil::label_color_role::dim));
+            if (section.clear)
+                heading->add(widget_button(section.id + u8"-clear", u8"최근 응답 · 종료 목록 정리 — 새 소식이 오면 다시 보입니다", luil::codicons::icon_clear_all, luil::make_message_action(clear_completed_intent {})),
+                    { .length = widget_icon_button, .cross_length = widget_icon_button });
+            add(std::move(heading), heading_height);
+
+            // 카드: 위는 표식·폴더·시각, 가운데는 요청, 아래는 결과나 기다리는 까닭을 그 뜻의 색으로 한 줄.
+            for (std::size_t index { 0 }; index < std::min(section.shown, sessions.size()); ++index)
+            {
+                const auto& session { *sessions[index] };
+                const std::u8string card_id { section.id + u8"-" + u8(std::to_string(index)) };
+                const bool previewing { preview_.surface == status_surface && preview_.owner == card_id };
+                const session_tone tone { tone_of(session, now) };
+                const luil::stack_config body_config { .spacing = 3.0f, .padding = { 12.0f, 8.0f, 12.0f, 10.0f } };
+                auto body { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, card_id + u8"-body" }, body_config) };
+                const luil::stack_config top_config { .direction = luil::stack_direction::row, .spacing = 8.0f, .cross_alignment = luil::stack_alignment::center };
+                auto top { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, card_id + u8"-top" }, top_config) };
+                top->add_flexible(provider_line(card_id + u8"-source", session.provider, project_text(session), 11.0f));
+                top->add_fit(label(card_id + u8"-age", age_text(latest_update(session), now), 11.0f, luil::label_color_role::dim));
+                body->add(std::move(top), 16.0f);
+                const std::u8string request { session.title.empty() ? task_text(session) : u8(session.title) };
+                body->add(label(card_id + u8"-request", request, 12.0f), 18.0f);
+                // 기다리거나 일하는 세션은 무엇을 기다리는지·하는지가 상태를 말한다. 끝난 세션은 상태 뒤에 결과를 붙인다.
+                std::u8string result { tone == session_tone::done ? state_text(session, now) : activity_text(session, now) };
+                if (tone == session_tone::done && !session.summary.empty())
+                    result += u8" — " + u8(session.summary);
+                const auto tint { text_tint_of(tone) };
+                body->add(tinted(card_id + u8"-result-tint", tint, label(card_id + u8"-result", result, 11.0f, tint == nullptr ? luil::label_color_role::dim : luil::label_color_role::primary)), 16.0f);
+                auto card { std::make_unique<status_card>(card_id, previewing, std::move(body)) };
+                card->set_access_name(provider_text(session) + u8" · " + project_text(session) + u8" · " + request);
+                card->set_cursor(luil::ui_cursor::hand);
+                // 누르면 상세 화면에서 그 세션을 고른다. 세션 창 이동은 세부 정보의 주 동작이다.
+                card->set_action(luil::ui_trigger::left_click, luil::make_message_action(open_detail_intent { .key = session_key(session), .keep_open = true }));
+                set_preview(*card, card_id, session_key(session), std::u8string { status_surface });
+                if (previewing)
+                    preview_card = card.get();
+                add(std::move(card), card_height);
+            }
+            if (sessions.size() > section.shown)
+            {
+                const luil::stack_config more_config { .direction = luil::stack_direction::row, .spacing = 4.0f, .cross_alignment = luil::stack_alignment::center, .main_alignment = luil::stack_main_alignment::center };
+                auto more_line { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, section.id + u8"-more-line" }, more_config) };
+                more_line->add_fit(tinted(section.id + u8"-more-tint", accent_text_tint,
+                    label(section.id + u8"-more-text", u8(std::to_string(sessions.size() - section.shown)) + u8"개 더 — 상세 화면에서 보기", 11.0f)));
+                more_line->add(tinted(section.id + u8"-more-mark-tint", accent_text_tint,
+                                   std::make_unique<luil::glyph_element>(luil::ui_element_id { kind_layout, section.id + u8"-more-mark" }, luil::glyph_config { .glyph = luil::codicons::icon_chevron_right, .font_size = 12.0f })),
+                    { .length = 12.0f, .cross_length = 12.0f });
+                luil::panel_config more_surface {};
+                more_surface.background = [](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.primary_foreground, 0.04f); };
+                more_surface.corner_radius = 4.0f;
+                auto more { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_button, section.id + u8"-more" }, more_surface) };
+                more->set_content(std::move(more_line));
+                more->set_hit_opaque(true);
+                more->set_cursor(luil::ui_cursor::hand);
+                more->set_access_name(u8"상세 화면에서 " + section.name + u8" 모두 보기");
+                more->set_action(luil::ui_trigger::left_click, luil::make_message_action(open_detail_intent { .keep_open = true }));
+                strip_tooltips(*more);
+                add(std::move(more), more_height);
+            }
+        }
+        if (content_height <= 0.0f)
+            add(label(u8"status-empty", u8"지금 지켜볼 세션이 없습니다", 12.0f, luil::label_color_role::dim, luil::text_align::center), empty_height);
+
+        // 접혀 있으면 화면 끝까지 남은 자리에, 펼쳐 있으면 정해 둔 높이에 맞춰 넘치는 카드는 흘린다.
+        const float scale { metrics_.scale > 0.0f ? metrics_.scale : 1.0f };
+        float limit { maximum_height };
+        if (collapsed_ && metrics_.notification_room > 0.0f)
+            limit = std::clamp(metrics_.notification_room / scale - widget_actions_gap, 200.0f, maximum_height);
+        const float height { std::min(content_height + 2.0f * inset, limit) };
+        auto frame_content { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"status-content" }, luil::stack_config { .padding = luil::edge_insets::all(inset) }) };
+        luil::scroll_area_element* scroll_metrics { nullptr };
+        if (content_height + 2.0f * inset > limit)
+        {
+            luil::scroll_area_config config { .owner = u8"status-scroll", .content_height = content_height, .scroll_offset = status_scroll_ };
+            config.scroll = [](const float delta) { return luil::make_app_action(scroll_intent { .value = delta, .status = true }); };
+            config.scroll_to = [](const float value) { return luil::make_app_action(scroll_intent { .value = value, .absolute = true, .status = true }); };
+            auto scroll { std::make_unique<luil::scroll_area_element>(std::move(config)) };
+            scroll->set_content(std::move(list));
+            scroll_metrics = scroll.get();
+            frame_content->add_flexible(std::move(scroll));
+        }
+        else
+        {
+            status_scroll_ = 0.0f;
+            frame_content->add_flexible(std::move(list));
+        }
+
+        auto background { std::make_unique<popup_backing>(u8"status-background", std::move(frame_content)) };
+        background->set_hover_region(luil::hover_region_target {
+            .on_enter = [] { return luil::make_app_action(panel_hover_intent { .panel = widget_panel::status, .popup = true, .inside = true }); },
+            .on_leave = [] { return luil::make_app_action(panel_hover_intent { .panel = widget_panel::status, .popup = true, .inside = false }); },
+        });
+        auto root { std::make_unique<luil::root_element>() };
+        root->arrange({ { 0.0f, 0.0f, popup_width * scale, height * scale }, scale });
+        background->arrange({ { 0.0f, 0.0f, popup_width * scale, height * scale }, scale });
+        if (scroll_metrics != nullptr)
+            status_scroll_ = scroll_metrics->metrics().scroll_offset;
+        if (preview_card != nullptr)
+            preview_top_ = preview_card->bounds().y / scale;
+        root->add(std::move(background));
+        // 표식 왼쪽 끝에 맞춰 바로 아래(머릿줄이 바닥이면 바로 위)에 띄운다. 위젯 오른쪽을 넘으면 안으로 당긴다.
+        const float window_height { metrics_.height / scale };
+        constexpr float caption_height { static_cast<float>(widget_caption_height) };
+        status_popup_x_ = std::max(0.0f, std::min(*status_left_, metrics_.width / scale - popup_width));
+        status_popup_width_ = popup_width;
+        luil::ui_popup popup {};
+        popup.id = std::u8string { status_surface };
+        popup.x = status_popup_x_;
+        popup.y = metrics_.header_bottom ? window_height - caption_height - widget_actions_gap - height : caption_height + widget_actions_gap;
+        popup.width = popup_width;
+        popup.height = height;
+        popup.backdrop = luil::window_backdrop::acrylic;
+        popup.dismiss = close_panel(widget_panel::status);
+        popup.tree = std::make_shared<const luil::ui_tree>(std::move(root));
+        frame.popups.push_back(std::move(popup));
+    }
+
     std::vector<std::unique_ptr<luil::button_element>> board_driver::widget_actions() const
     {
         std::vector<std::unique_ptr<luil::button_element>> result {};
@@ -2723,14 +3456,13 @@ namespace session_board {
             u8"widget-detail", detail_open_ ? u8"상세 화면 닫기" : u8"상세 화면 열기", luil::codicons::icon_editor_layout, luil::make_message_action(open_detail_intent {}), detail_open_));
         const auto panel_button = [&](const std::u8string& id, const std::u8string& name, const char32_t glyph, const widget_panel panel) {
             const bool open { panel_ == panel };
-            result.push_back(widget_button(id, name, glyph, luil::make_message_action(widget_panel_intent { panel, !open }), open));
+            auto button { widget_button(id, name, glyph, luil::make_message_action(widget_panel_intent { panel, !open }), open) };
+            press_toggles(*button);
+            result.push_back(std::move(button));
         };
         panel_button(u8"widget-theme", u8"테마 · 키 컬러", luil::codicons::icon_color_mode, widget_panel::theme);
         panel_button(u8"widget-backdrop", u8"배경 효과 · 진하기", luil::codicons::icon_symbol_color, widget_panel::backdrop);
         result.push_back(widget_button(u8"widget-pin", pinned_ ? u8"항상 위에 표시 해제" : u8"항상 위에 표시", luil::codicons::icon_pin, command_action(toggle_pin_command), pinned_));
-        const bool points_down { collapsed_ != metrics_.header_bottom };
-        result.push_back(widget_button(u8"widget-collapse", collapsed_ ? u8"목록 펼치기" : u8"목록 접기", points_down ? luil::codicons::icon_chevron_down : luil::codicons::icon_chevron_up,
-            command_action(toggle_collapse_command)));
         return result;
     }
 
@@ -2812,7 +3544,23 @@ namespace session_board {
             level_row->add_flexible(std::move(slider));
             level_row->add(label(u8"widget-opacity-value", u8(std::to_string(std::lround(opacity_ * 100.0f))) + u8"%", 11.0f, luil::label_color_role::dim, luil::text_align::end), 36.0f);
             settings->add(std::move(level_row), widget_setting_row);
-            height += 2.0f * widget_setting_row + 4.0f;
+            // 카드 바탕의 진하기다. 낮을수록 창의 흐림이 카드 뒤로 비치고, 글에는 후광·테를 짙게 둘러 읽히게 한다.
+            //  - 창 효과와 달리 그리기만 바뀌므로 위젯 창을 거치지 않고 앱이 바로 받는다.
+            //  - 흐림이 없거나(투명) 뒤가 비치지 않으면(100%) 카드는 불투명이라 고를 일이 없다. 값은 남겨 둔다.
+            const bool translucent { cards_translucent() };
+            luil::slider_config card_level { .minimum = 0.0f, .maximum = 1.0f, .value = card_opacity_ };
+            card_level.change = [](const float delta) { return luil::make_app_action(card_opacity_intent { .value = delta, .relative = true }); };
+            card_level.change_to = [](const float value) { return luil::make_app_action(card_opacity_intent { .value = value }); };
+            card_level.magnets.assign(widget_opacity_magnets.begin(), widget_opacity_magnets.end());
+            auto card_slider { std::make_unique<luil::slider_element>(luil::ui_element_id { kind_button, u8"widget-card-opacity" }, std::move(card_level)) };
+            card_slider->set_enabled(translucent);
+            card_slider->set_tooltip(translucent ? u8"카드 진하기" : u8"카드 진하기 · 흐림이나 Acrylic 배경에서 진하기가 100% 미만일 때 고릅니다");
+            auto card_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-card-opacity-row" }, row_config) };
+            card_row->add(label(u8"widget-card-opacity-name", u8"카드", 11.0f, luil::label_color_role::dim), 40.0f);
+            card_row->add_flexible(std::move(card_slider));
+            card_row->add(label(u8"widget-card-opacity-value", u8(std::to_string(std::lround(card_opacity_ * 100.0f))) + u8"%", 11.0f, luil::label_color_role::dim, luil::text_align::end), 36.0f);
+            settings->add(std::move(card_row), widget_setting_row);
+            height += 3.0f * widget_setting_row + 2.0f * 4.0f;
         }
 
         auto background { std::make_unique<popup_backing>(u8"settings-background", std::move(settings)) };
@@ -2850,8 +3598,8 @@ namespace session_board {
         auto background { std::make_unique<popup_backing>(u8"actions-background", std::move(row)) };
         // 표지 단추에서 이 팝업으로 옮겨 오는 동안 닫히지 않게 한다. 떠나면 잠시 뒤 닫는다.
         background->set_hover_region(luil::hover_region_target {
-            .on_enter = [] { return luil::make_app_action(actions_hover_intent { .popup = true, .inside = true }); },
-            .on_leave = [] { return luil::make_app_action(actions_hover_intent { .popup = true, .inside = false }); },
+            .on_enter = [] { return luil::make_app_action(panel_hover_intent { .panel = widget_panel::actions, .popup = true, .inside = true }); },
+            .on_leave = [] { return luil::make_app_action(panel_hover_intent { .panel = widget_panel::actions, .popup = true, .inside = false }); },
         });
         auto root { std::make_unique<luil::root_element>() };
         root->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
@@ -2945,7 +3693,7 @@ namespace session_board {
         }
     }
 
-    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, const bool header_bottom) noexcept
+    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, const bool header_bottom, const bool collapsed) noexcept
     {
         try
         {
@@ -2954,6 +3702,8 @@ namespace session_board {
                 value["maximized"] = true;
             if (header_bottom)
                 value["header_bottom"] = true;
+            if (collapsed)
+                value["collapsed"] = true;
             write_json_file(file, value);
         }
         catch (...)
@@ -2984,6 +3734,9 @@ namespace session_board {
             if (const auto opacity { value.find("opacity") }; opacity != value.end() && opacity->is_number())
                 if (const auto level { opacity->get<float>() }; std::isfinite(level))
                     result.opacity = std::clamp(level, 0.0f, 1.0f);
+            if (const auto card { value.find("card_opacity") }; card != value.end() && card->is_number())
+                if (const auto level { card->get<float>() }; std::isfinite(level))
+                    result.card_opacity = std::clamp(level, 0.0f, 1.0f);
             return result;
         }
         catch (...)
@@ -3002,6 +3755,7 @@ namespace session_board {
                 { "accent", std::string { appearance.accent_id.begin(), appearance.accent_id.end() } },
                 { "backdrop", backdrop_name(appearance.backdrop) },
                 { "opacity", appearance.opacity },
+                { "card_opacity", appearance.card_opacity },
             };
             write_json_file(file, value);
         }
@@ -3022,10 +3776,25 @@ namespace session_board {
         }
     }
 
-    board_delegate::board_delegate(std::filesystem::path placement_file, const bool restored, single_instance* instance, widget_appearance appearance, const bool header_bottom)
+    bool load_widget_collapsed(const std::filesystem::path& file) noexcept
+    {
+        try
+        {
+            std::ifstream input { file, std::ios::binary };
+            return input && nlohmann::json::parse(input).value("collapsed", false);
+        }
+        catch (...)
+        {
+            return false;
+        }
+    }
+
+    board_delegate::board_delegate(
+        std::filesystem::path placement_file, const bool restored, single_instance* instance, widget_appearance appearance, const bool header_bottom, const bool collapsed)
         : placement_file_ { std::move(placement_file) }
         , restored_ { restored }
         , header_bottom_ { header_bottom }
+        , collapsed_ { collapsed }
         , appearance_ { std::move(appearance) }
         , instance_ { instance }
     {}
@@ -3051,6 +3820,14 @@ namespace session_board {
             host.post_app_message(luil::app_message { widget_failed_intent {} });
             return;
         }
+        // 지난번에 목록을 접어 둔 채 닫았으면 접은 채로 연다. 저장한 크기는 펼친 크기라 펼치면 그 크기로 돌아온다.
+        //  - 시작할 때 luil이 알린 자리는 접기 전의 것이라 접힘이 빠진 채 저장됐다. 접은 뒤 다시 쓴다.
+        if (collapsed_)
+        {
+            window_.toggle_collapse();
+            if (!placement_file_.empty() && placement_.has_value())
+                save_window_placement(placement_file_, *placement_, window_.header_bottom(), window_.collapsed());
+        }
         if (instance_ != nullptr)
             instance_->bind_window(window_.handle());
         // 위젯은 작업 표시줄에 서지 않으므로 숨기거나 끝낼 자리를 알림 영역에 둔다.
@@ -3070,15 +3847,21 @@ namespace session_board {
             if (window_.header_bottom())
                 saved.y -= saved.height - placement.height;
         }
-        save_window_placement(placement_file_, saved, window_.header_bottom());
+        placement_ = saved;
+        save_window_placement(placement_file_, saved, window_.header_bottom(), window_.collapsed());
         return {};
     }
 
     void board_delegate::execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command)
     {
         // 접힘 상태는 창 크기를 바꾸며 luil이 알리는 metrics에 실려 간다.
+        //  - luil은 접기로 바뀐 크기를 끝날 때에야 알린다. 강제로 끝나도 남도록 접힘은 바꾼 자리에서 바로 저장한다.
         if (command.command == toggle_collapse_command)
+        {
             window_.toggle_collapse();
+            if (!placement_file_.empty() && placement_.has_value())
+                save_window_placement(placement_file_, *placement_, window_.header_bottom(), window_.collapsed());
+        }
         else if (command.command == toggle_pin_command)
         {
             window_.toggle_pin();

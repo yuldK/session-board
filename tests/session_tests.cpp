@@ -35,6 +35,35 @@ namespace session_board {
             return parse_event({ { "schema_version", 1 }, { "provider", provider }, { "session_id", "test-session" }, { "event", kind }, { "timestamp_ms", now_ms() }, { "turn_id", "turn-1" } });
         }
 
+        // 응답 글이 묻고 끝나는가다. 끝의 공백·마크다운 꾸밈은 걷고, 글 가운데의 물음은 묻는 말로 보지 않는다.
+        void questions()
+        {
+            require(asks_user("바로 커밋할까요?"), "Plain question missed.");
+            require(asks_user("고쳤습니다.\n\n**커밋할까요?**  \n"), "Decorated question missed.");
+            require(asks_user("(다음에 할까요?)"), "Parenthesized question missed.");
+            require(asks_user("어떠세요\xEF\xBC\x9F"), "Full-width question missed.");
+            require(!asks_user("왜 그런지 확인했습니다. 고쳤습니다."), "Report shown as a question.");
+            require(!asks_user("무엇이 문제였을까요? 원인은 캐시였습니다."), "Question in the middle shown as waiting.");
+            require(!asks_user(""), "Empty answer shown as a question.");
+            session_snapshot snapshot {};
+            const auto apply = [&](const std::string& name, const std::string& summary) {
+                session_event event {};
+                event.provider = "claude";
+                event.session_id = "questions";
+                event.event = name;
+                event.timestamp_ms = 1000;
+                event.turn_id = "turn";
+                event.summary = summary;
+                static_cast<void>(apply_event(snapshot, event));
+            };
+            apply("turn_started", "");
+            apply("turn_finished", "다음으로 넘어갈까요?");
+            require(snapshot.awaiting_reply, "Hook question not kept.");
+            require(parse_snapshot(serialize_snapshot(snapshot)).awaiting_reply, "Waiting for a reply lost in storage.");
+            apply("turn_started", "");
+            require(!snapshot.awaiting_reply, "New turn kept the old question.");
+        }
+
         void lifecycle()
         {
             session_snapshot snapshot {};
@@ -327,6 +356,37 @@ namespace session_board {
             updates.observe({ session, other }, true, now);
             updates.expire(now + std::chrono::seconds { 8 });
             require(updates.pending().empty(), "Resolved child notification did not expire or an ordinary session was announced.");
+
+            // 묻고 끝난 응답도 답을 기다리는 알림이라 접힌 동안 밖에 띄운다. 답하지 않기로 하고 숨기면 그 응답은 다시 띄우지 않는다.
+            session_updates replies {};
+            session_snapshot asked { .provider = "claude", .session_id = "reply-test", .turn_id = "turn-1", .status = session_status::running };
+            replies.observe({ asked }, true, now);
+            asked.status = session_status::idle;
+            asked.turn_closed = true;
+            asked.awaiting_reply = true;
+            replies.observe({ asked }, true, now);
+            require(replies.pending().size() == 1 && replies.pending().front().response_required && !replies.pending().front().completed, "A question at the end of an answer was not kept as a response request.");
+            replies.expire(now + std::chrono::hours { 1 });
+            require(replies.pending().size() == 1, "A waiting question timed out.");
+            replies.acknowledge("claude", "reply-test", replies.pending().front().sequence);
+            require(replies.pending().empty(), "A waiting question could not be dismissed.");
+            replies.observe({ asked }, true, now);
+            require(replies.pending().empty(), "A dismissed question came back for the same answer.");
+            asked.turn_id = "turn-2";
+            asked.status = session_status::running;
+            asked.turn_closed = false;
+            asked.awaiting_reply = false;
+            replies.observe({ asked }, true, now);
+            asked.status = session_status::idle;
+            asked.turn_closed = true;
+            asked.awaiting_reply = true;
+            replies.observe({ asked }, true, now);
+            require(replies.pending().size() == 1 && replies.pending().front().response_required, "A new question after a dismissed one was not shown.");
+            // 이미 묻고 끝나 있던 세션도 접는 순간 알린다.
+            session_updates collapsed {};
+            collapsed.observe({ asked }, false, now);
+            collapsed.observe({ asked }, true, now);
+            require(collapsed.pending().size() == 1 && collapsed.pending().front().response_required, "A waiting question disappeared when collapsing.");
         }
 
         void validation()
@@ -707,6 +767,7 @@ int main()
     const auto directory { std::filesystem::temp_directory_path() / (L"session-board-test-" + std::to_wstring(GetCurrentProcessId())) };
     try
     {
+        session_board::questions();
         session_board::lifecycle();
         session_board::failures_and_long_tools();
         session_board::widget_anchoring();

@@ -91,6 +91,9 @@ namespace session_board {
         std::int64_t updated_ms { 0 };
         std::uint64_t revision { 0 };
         bool turn_closed { false };
+        // 끝난 응답이 사용자에게 묻고 끝났다 (물음표로 끝난 마지막 글, 데스크톱 앱의 질문 상자). 응답 대기와 응답 완료를 가른다.
+        //  - 새 요청이 시작되면 거둔다.
+        bool awaiting_reply { false };
         std::vector<std::string> active_tools {};
         std::string name {};
         std::string activity {};
@@ -124,6 +127,8 @@ namespace session_board {
     // 오류 종류를 화면에 쓰는 말로 바꾼다. 모르는 값은 일반 오류로 말한다.
     [[nodiscard]] std::string failure_label(std::string_view failure);
     [[nodiscard]] bool is_working(session_status status);
+    // 응답 글이 사용자에게 묻고 끝나는가다. 끝의 공백과 마크다운 꾸밈을 걷은 뒤 물음표로 끝나면 참이다.
+    [[nodiscard]] bool asks_user(std::string_view text);
     inline constexpr std::int64_t widget_retention_ms { 15 * 60 * 1000 };
     [[nodiscard]] bool is_widget_visible(const session_snapshot& snapshot, std::int64_t time_ms);
 

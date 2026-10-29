@@ -360,6 +360,7 @@ namespace session_board {
         {
             snapshot.status = session_status::running;
             snapshot.turn_closed = false;
+            snapshot.awaiting_reply = false;
             snapshot.active_tools.clear();
             snapshot.tool_name.clear();
         }
@@ -404,6 +405,8 @@ namespace session_board {
             snapshot.turn_closed = true;
             snapshot.active_tools.clear();
             snapshot.tool_name.clear();
+            // Hook은 마지막 응답 글을 요약으로 싣는다. 그 글이 묻고 끝났으면 사용자의 답을 기다린다.
+            snapshot.awaiting_reply = event.event == "turn_finished" && asks_user(event.summary);
             if (event.event == "failed")
                 snapshot.failure = event.failure;
             // 포그라운드 하위는 부모 turn 안에서 끝나야 한다. 남아 있으면 끝을 놓친 것이다.
@@ -444,6 +447,8 @@ namespace session_board {
             { "host_process_id", snapshot.host_process_id } };
         if (!snapshot.failure.empty())
             result["failure"] = snapshot.failure;
+        if (snapshot.awaiting_reply)
+            result["awaiting_reply"] = true;
         if (!snapshot.children.empty())
         {
             auto& children { result["children"] = nlohmann::json::array() };
@@ -475,6 +480,9 @@ namespace session_board {
         snapshot.updated_ms = input.at("updated_ms").get<std::int64_t>();
         snapshot.revision = input.at("revision").get<std::uint64_t>();
         snapshot.turn_closed = input.at("turn_closed").get<bool>();
+        // 이 칸이 생기기 전에 저장한 세션은 묻지 않고 끝난 것으로 읽는다.
+        if (const auto awaiting { input.find("awaiting_reply") }; awaiting != input.end() && awaiting->is_boolean())
+            snapshot.awaiting_reply = awaiting->get<bool>();
         snapshot.active_tools = input.at("active_tools").get<std::vector<std::string>>();
         if (snapshot.active_tools.size() > 64)
             throw std::runtime_error { "Too many tools." };
@@ -489,6 +497,17 @@ namespace session_board {
                 snapshot.children.push_back(parse_child(child));
         }
         return snapshot;
+    }
+
+    bool asks_user(std::string_view text)
+    {
+        // 글 끝의 공백·줄바꿈과 강조·코드·괄호 닫기를 걷는다. "~할까요?**"나 "(~할까요?)"도 묻는 말이다.
+        constexpr std::string_view trailing { " \t\r\n*_`\"')" };
+        while (!text.empty() && trailing.find(text.back()) != std::string_view::npos)
+            text.remove_suffix(1);
+        // 전각 물음표(U+FF1F)다.
+        constexpr std::string_view full_width_question { "\xEF\xBC\x9F" };
+        return text.ends_with('?') || text.ends_with(full_width_question);
     }
 
     bool is_working(const session_status status)

@@ -31,7 +31,7 @@ Google Antigravity(`provider: "antigravity"`)의 대화를 로컬 기록만으�
 | 위 도구가 `invoke_subagent` | 하위 에이전트 행(`args.Role`, `args.TypeName`). 그 도구의 결과가 오면 닫는다 |
 | `MODEL` / `GENERIC`, `DONE`·`ERROR` | 결과를 기다리던 도구 하나가 끝난다(호출 순서대로). `ERROR`는 도구 하나의 실패라 세션을 `failed`로 만들지 않는다 |
 | `MODEL` / `GENERIC`, `RUNNING` + `running as a background task with task id: <작업 ID>` | 그 도구는 끝나고 백그라운드 명령 하위 행이 열린다. 작업 ID는 `<대화 ID>/task-N` 전체다 |
-| `MODEL` / `PLANNER_RESPONSE`, 도구 없음 `DONE` | 응답 완료. 포그라운드 하위는 `확인 불가`로 닫고 백그라운드 명령은 남긴다 |
+| `MODEL` / `PLANNER_RESPONSE`, 도구 없음 `DONE` | 응답 완료(묻고 끝나면 응답 대기). 포그라운드 하위는 `확인 불가`로 닫고 백그라운드 명령은 남긴다 |
 | `SYSTEM` / `SYSTEM_MESSAGE` | 사용자 turn이 아니다. `sender=<작업 ID>`와 `Task id "…" finished`면 그 하위를 완료로 닫는다 |
 | `SYSTEM` / `CHECKPOINT` | 상태는 바꾸지 않는다. `title`이 비었을 때만 `# USER Objective:` 다음 줄을 쓴다 |
 

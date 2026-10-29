@@ -4,6 +4,11 @@
 #include <set>
 
 namespace session_board {
+    bool awaits_reply(const session_snapshot& session)
+    {
+        return session.status == session_status::idle && session.turn_closed && session.awaiting_reply;
+    }
+
     namespace {
         bool needs_response(const session_snapshot& session)
         {
@@ -39,7 +44,9 @@ namespace session_board {
             current.insert(key);
             if (!hidden)
                 continue;
-            const bool response_required { needs_response(session) };
+            const auto dismissed { dismissed_replies_.find(key) };
+            const bool reply_dismissed { dismissed != dismissed_replies_.end() && dismissed->second == session.turn_id };
+            const bool response_required { needs_response(session) || (awaits_reply(session) && !reply_dismissed) };
             const auto pending { std::ranges::find_if(pending_, [&](const auto& item) { return item.session.provider == session.provider && item.session.session_id == session.session_id; }) };
             if (response_required)
             {
@@ -55,7 +62,7 @@ namespace session_board {
                     pending->expires_at.reset();
                 }
             }
-            else if (was_working && finished(session))
+            else if (was_working && finished(session) && !awaits_reply(session))
             {
                 auto& announced { completed_turns_[key] };
                 const bool repeated { !session.turn_id.empty() && announced == session.turn_id };
@@ -107,7 +114,17 @@ namespace session_board {
 
     void session_updates::acknowledge(const std::string& provider, const std::string& session_id, const std::uint64_t sequence)
     {
-        std::erase_if(pending_, [&](const auto& item) { return !item.response_required && item.session.provider == provider && item.session.session_id == session_id && item.sequence == sequence; });
+        std::erase_if(pending_, [&](const auto& item) {
+            if (item.session.provider != provider || item.session.session_id != session_id || item.sequence != sequence)
+                return false;
+            // 묻고 끝난 응답은 답하지 않기로 할 수 있다. 그 turn은 다시 띄우지 않는다.
+            if (item.response_required && awaits_reply(item.session))
+            {
+                dismissed_replies_[{ provider, session_id }] = item.session.turn_id;
+                return true;
+            }
+            return !item.response_required;
+        });
     }
 
     void session_updates::expire(const std::chrono::steady_clock::time_point now)

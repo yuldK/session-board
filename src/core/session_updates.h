@@ -23,8 +23,13 @@ namespace session_board {
 
     // 접힌 동안 알릴 세션을 유지한다.
     //  - 사용자 응답이 필요한 세션: 응답이 처리되면 잠깐 `응답 처리됨`으로 남긴다.
+    //    승인·입력 대기와 함께 묻고 끝난 응답(`awaiting_reply`)도 여기 든다. 묻고 끝난 응답은 답하지 않기로 할 수 있어 숨길 수
+    //    있고, 숨긴 그 응답은 새 요청이 오기 전까지 다시 띄우지 않는다.
     //  - 작업 중이던 세션의 응답 완료·오류: 무엇을 요청했고 어떻게 끝났는지 놓치지 않게 닫을 때까지 남긴다.
     //  - 진행 갱신은 알리지 않는다.
+    // 응답이 사용자에게 묻고 끝나 그 답을 기다린다. 승인·입력 대기와 달리 답하지 않고 숨길 수 있다.
+    [[nodiscard]] bool awaits_reply(const session_snapshot& session);
+
     class session_updates final
     {
     public:
@@ -42,5 +47,7 @@ namespace session_board {
         std::map<session_key, bool> working_ {};
         // 이미 알린 완료의 turn이다. 상태가 잠깐 흔들려 같은 turn이 다시 끝나도 두 번 알리지 않는다.
         std::map<session_key, std::string> completed_turns_ {};
+        // 사용자가 숨긴 묻고 끝난 응답의 turn이다.
+        std::map<session_key, std::string> dismissed_replies_ {};
     };
 } // namespace session_board

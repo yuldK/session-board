@@ -529,6 +529,7 @@ namespace session_board {
             snapshot_.status = session_status::running;
             snapshot_.turn_closed = false;
             snapshot_.summary.clear();
+            snapshot_.awaiting_reply = false;
             snapshot_.tool_name.clear();
             snapshot_.active_tools.clear();
             pending_.clear();
@@ -563,7 +564,9 @@ namespace session_board {
                 snapshot_.active_tools.clear();
                 snapshot_.tool_name.clear();
                 pending_.clear();
-                snapshot_.activity = "응답 완료";
+                // 마지막 공개 답이 묻고 끝났으면 사용자의 답을 기다린다.
+                snapshot_.awaiting_reply = asks_user(content);
+                snapshot_.activity = snapshot_.awaiting_reply ? "응답 대기" : "응답 완료";
                 snapshot_.last_event = "turn_finished";
                 close_children(snapshot_, session_status::ended, snapshot_.updated_ms, true);
             }

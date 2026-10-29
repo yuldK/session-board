@@ -210,6 +210,7 @@ namespace session_board {
                 snapshot_.turn_closed = false;
                 snapshot_.status = session_status::running;
                 snapshot_.summary.clear();
+                snapshot_.awaiting_reply = false;
                 snapshot_.tool_name.clear();
                 snapshot_.active_tools.clear();
                 snapshot_.activity = "작업 내용 수신 대기";
@@ -223,9 +224,12 @@ namespace session_board {
                 snapshot_.status = event == "task_complete" ? session_status::idle : event == "turn_aborted" ? session_status::interrupted : session_status::failed;
                 snapshot_.tool_name.clear();
                 snapshot_.active_tools.clear();
-                snapshot_.activity = event == "task_complete" ? "응답 완료" : event == "turn_aborted" ? "사용자가 작업 중단" : "작업 오류";
+                // 마지막 답이 묻고 끝났으면 사용자의 답을 기다린다.
+                const auto last_message { event == "task_complete" ? text_field(payload, "last_agent_message", 1024) : std::string {} };
+                snapshot_.awaiting_reply = asks_user(last_message);
+                snapshot_.activity = event == "task_complete" ? (snapshot_.awaiting_reply ? "응답 대기" : "응답 완료") : event == "turn_aborted" ? "사용자가 작업 중단" : "작업 오류";
                 if (event == "task_complete")
-                    public_message(text_field(payload, "last_agent_message", 1024));
+                    public_message(last_message);
             }
             else if (event == "agent_message")
                 public_message(text_field(payload, "message", 1024));
