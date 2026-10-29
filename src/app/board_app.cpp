@@ -114,25 +114,52 @@ namespace session_board {
             {
                 luil::ui_color_palette palette { context.palette };
                 tint_(palette);
-                luil::draw_context tinted {
-                    .canvas = context.canvas,
-                    .codicon_typeface = context.codicon_typeface,
-                    .ui_typeface = context.ui_typeface,
-                    .code_typeface = context.code_typeface,
-                    .fonts = context.fonts,
-                    .palette = palette,
-                    .scale = context.scale,
-                    .now = context.now,
-                    .maximized = context.maximized,
-                    .fullscreen = context.fullscreen,
-                    .metrics = context.metrics,
-                    .reduce_motion = context.reduce_motion,
-                };
+                luil::draw_context tinted { luil::derive_draw_context(context, palette, context.scale) };
                 draw_children(tinted, interaction);
             }
 
         private:
             std::function<void(luil::ui_color_palette&)> tint_ {};
+        };
+
+        // 알림 popup의 백판이다. popup 뒤에 acrylic이 섰을 때만 판과 카드를 옅게 해 효과를 비춘다.
+        //  - 효과가 섰는지는 표면만 안다 (`draw_context::backdrop`). 고대비·투명 효과 꺼짐처럼 서지 않으면 지금처럼 불투명하다.
+        //  - 진하기는 위젯 설정과 관계없이 고정이다. 접힌 위젯 밖에 떠서 뒤 창의 글이 비치면 읽기 어렵다.
+        class popup_backing final : public luil::ui_element
+        {
+        public:
+            popup_backing(const std::u8string& id, std::unique_ptr<luil::ui_element> content)
+                : ui_element { luil::ui_element_id { kind_layout, id } }
+            {
+                add_child(std::move(content));
+            }
+
+            void arrange(const luil::arrange_context& context) override
+            {
+                set_bounds(context.slot);
+                for (const auto& child : children())
+                    child->arrange(context.for_child(context.slot));
+            }
+
+            void draw(luil::draw_context& context, const luil::interaction_snapshot& interaction) const override
+            {
+                const luil::rect_f box { bounds() };
+                const SkRect area { SkRect::MakeXYWH(box.x, box.y, box.width, box.height) };
+                context.canvas.drawRect(area, luil::solid_paint(luil::with_alpha(context.palette.window_background, context.backdrop ? backing_alpha : 1.0f)));
+                if (!context.backdrop)
+                {
+                    draw_children(context, interaction);
+                    return;
+                }
+                luil::ui_color_palette palette { context.palette };
+                palette.surface_background = luil::with_alpha(palette.surface_background, card_alpha);
+                luil::draw_context tinted { luil::derive_draw_context(context, palette, context.scale) };
+                draw_children(tinted, interaction);
+            }
+
+        private:
+            static constexpr float backing_alpha { 0.55f };
+            static constexpr float card_alpha { 0.6f };
         };
 
         // Simple Icons(CC0)의 Claude·OpenAI 표식 경로다 (24×24 viewBox).
@@ -2382,10 +2409,7 @@ namespace session_board {
             update_scroll_ = 0.0f;
             content->add(std::move(rows), content_height);
         }
-        luil::panel_config surface {};
-        surface.background = [](const luil::ui_color_palette& palette) { return luil::with_alpha(palette.window_background, 1.0f); };
-        auto background { std::make_unique<luil::panel_element>(luil::ui_element_id { kind_layout, u8"update-background" }, surface) };
-        background->set_content(std::move(content));
+        auto background { std::make_unique<popup_backing>(u8"update-background", std::move(content)) };
         auto root { std::make_unique<luil::root_element>() };
         root->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
         background->arrange({ { 0.0f, 0.0f, width * scale, height * scale }, scale });
@@ -2397,6 +2421,7 @@ namespace session_board {
         popup.y = metrics_.header_bottom ? -height - gap : static_cast<float>(widget_caption_height) + gap;
         popup.width = width;
         popup.height = height;
+        popup.backdrop = luil::window_backdrop::acrylic;
         popup.tree = std::make_shared<const luil::ui_tree>(std::move(root));
         frame.popups.push_back(std::move(popup));
     }
