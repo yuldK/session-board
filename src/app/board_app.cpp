@@ -2117,6 +2117,8 @@ namespace session_board {
             detail_metrics_ = *detail_metrics;
         else if (const auto* backdrop { message.get<backdrop_intent>() }; backdrop != nullptr)
             backdrop_ = backdrop->backdrop;
+        else if (const auto* header { message.get<header_placement_intent>() }; header != nullptr)
+            header_placement_ = header->placement;
         else if (const auto* opacity { message.get<opacity_intent>() }; opacity != nullptr)
             opacity_ = std::clamp(opacity->value, 0.0f, 1.0f);
         else if (const auto* card { message.get<card_opacity_intent>() }; card != nullptr)
@@ -3461,7 +3463,7 @@ namespace session_board {
             result.push_back(std::move(button));
         };
         panel_button(u8"widget-theme", u8"테마 · 키 컬러", luil::codicons::icon_color_mode, widget_panel::theme);
-        panel_button(u8"widget-backdrop", u8"배경 효과 · 진하기", luil::codicons::icon_symbol_color, widget_panel::backdrop);
+        panel_button(u8"widget-backdrop", u8"배경 효과 · 진하기 · 머릿줄", luil::codicons::icon_symbol_color, widget_panel::backdrop);
         result.push_back(widget_button(u8"widget-pin", pinned_ ? u8"항상 위에 표시 해제" : u8"항상 위에 표시", luil::codicons::icon_pin, command_action(toggle_pin_command), pinned_));
         return result;
     }
@@ -3560,7 +3562,24 @@ namespace session_board {
             card_row->add_flexible(std::move(card_slider));
             card_row->add(label(u8"widget-card-opacity-value", u8(std::to_string(std::lround(card_opacity_ * 100.0f))) + u8"%", 11.0f, luil::label_color_role::dim, luil::text_align::end), 36.0f);
             settings->add(std::move(card_row), widget_setting_row);
-            height += 3.0f * widget_setting_row + 2.0f * 4.0f;
+            // 머릿줄을 둘 끝이다. 창 자리를 바꾸므로 배경처럼 위젯 창이 먼저 받는다.
+            auto header_row { std::make_unique<luil::stack_element>(luil::ui_element_id { kind_layout, u8"widget-header-row" }, row_config) };
+            header_row->add(label(u8"widget-header-name", u8"머릿줄", 11.0f, luil::label_color_role::dim), 40.0f);
+            luil::choice_group_config header { .owner = u8"widget-header-placement", .style = luil::choice_style::toggle, .name = u8"머릿줄" };
+            header.items.push_back({ u8"header-automatic", u8"자동" });
+            header.items.push_back({ u8"header-top", u8"위" });
+            header.items.push_back({ u8"header-bottom", u8"아래" });
+            header.selected = header_placement_ == header_placement::top ? u8"header-top" : header_placement_ == header_placement::bottom ? u8"header-bottom" : u8"header-automatic";
+            header.select = [](const std::u8string& value) {
+                const std::uint32_t command { value == u8"header-top" ? header_top_command : value == u8"header-bottom" ? header_bottom_command : header_automatic_command };
+                return luil::input_action { luil::app_ui_command { command } };
+            };
+            auto header_element { std::make_unique<luil::choice_group_element>(std::move(header)) };
+            header_element->set_tooltip(u8"자동은 화면 끝에 닿으면 목록이 들어갈 쪽으로 머릿줄을 뒤집고, 위·아래는 늘 그 끝에 둡니다");
+            header_row->add_fit(std::move(header_element));
+            header_row->add_flexible_gap();
+            settings->add(std::move(header_row), widget_setting_row);
+            height += 4.0f * widget_setting_row + 3.0f * 4.0f;
         }
 
         auto background { std::make_unique<popup_backing>(u8"settings-background", std::move(settings)) };
@@ -3693,7 +3712,8 @@ namespace session_board {
         }
     }
 
-    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, const bool header_bottom, const bool collapsed) noexcept
+    void save_window_placement(
+        const std::filesystem::path& file, const luil::win32::window_placement& placement, const bool header_bottom, const bool collapsed, const header_placement header) noexcept
     {
         try
         {
@@ -3704,6 +3724,8 @@ namespace session_board {
                 value["header_bottom"] = true;
             if (collapsed)
                 value["collapsed"] = true;
+            if (header != header_placement::automatic)
+                value["header_placement"] = header == header_placement::bottom ? "bottom" : "top";
             write_json_file(file, value);
         }
         catch (...)
@@ -3776,6 +3798,22 @@ namespace session_board {
         }
     }
 
+    header_placement load_widget_header_placement(const std::filesystem::path& file) noexcept
+    {
+        try
+        {
+            std::ifstream input { file, std::ios::binary };
+            if (!input)
+                return header_placement::automatic;
+            const auto name { nlohmann::json::parse(input).value("header_placement", std::string {}) };
+            return name == "top" ? header_placement::top : name == "bottom" ? header_placement::bottom : header_placement::automatic;
+        }
+        catch (...)
+        {
+            return header_placement::automatic;
+        }
+    }
+
     bool load_widget_collapsed(const std::filesystem::path& file) noexcept
     {
         try
@@ -3789,12 +3827,13 @@ namespace session_board {
         }
     }
 
-    board_delegate::board_delegate(
-        std::filesystem::path placement_file, const bool restored, single_instance* instance, widget_appearance appearance, const bool header_bottom, const bool collapsed)
+    board_delegate::board_delegate(std::filesystem::path placement_file, const bool restored, single_instance* instance, widget_appearance appearance, const bool header_bottom, const bool collapsed,
+        const header_placement header)
         : placement_file_ { std::move(placement_file) }
         , restored_ { restored }
         , header_bottom_ { header_bottom }
         , collapsed_ { collapsed }
+        , header_placement_ { header }
         , appearance_ { std::move(appearance) }
         , instance_ { instance }
     {}
@@ -3805,7 +3844,7 @@ namespace session_board {
         window_.set_backdrop(appearance_.backdrop);
         window_.set_opacity(appearance_.opacity);
         if (!window_.attach(
-                restored_, header_bottom_,
+                restored_, header_bottom_, header_placement_,
                 [this, &host] {
                     const RECT box { window_.bounds() };
                     const float scale { static_cast<float>(GetDpiForWindow(window_.handle())) / 96.0f };
@@ -3826,8 +3865,9 @@ namespace session_board {
         {
             window_.toggle_collapse();
             if (!placement_file_.empty() && placement_.has_value())
-                save_window_placement(placement_file_, *placement_, window_.header_bottom(), window_.collapsed());
+                save_window_placement(placement_file_, *placement_, window_.header_bottom(), window_.collapsed(), window_.placement());
         }
+        host.post_app_message(luil::app_message { header_placement_intent { header_placement_ } });
         if (instance_ != nullptr)
             instance_->bind_window(window_.handle());
         // 위젯은 작업 표시줄에 서지 않으므로 숨기거나 끝낼 자리를 알림 영역에 둔다.
@@ -3848,7 +3888,7 @@ namespace session_board {
                 saved.y -= saved.height - placement.height;
         }
         placement_ = saved;
-        save_window_placement(placement_file_, saved, window_.header_bottom(), window_.collapsed());
+        save_window_placement(placement_file_, saved, window_.header_bottom(), window_.collapsed(), window_.placement());
         return {};
     }
 
@@ -3860,7 +3900,7 @@ namespace session_board {
         {
             window_.toggle_collapse();
             if (!placement_file_.empty() && placement_.has_value())
-                save_window_placement(placement_file_, *placement_, window_.header_bottom(), window_.collapsed());
+                save_window_placement(placement_file_, *placement_, window_.header_bottom(), window_.collapsed(), window_.placement());
         }
         else if (command.command == toggle_pin_command)
         {
@@ -3873,6 +3913,15 @@ namespace session_board {
             const auto backdrop { backdrop_of_command(command.command) };
             window_.set_backdrop(backdrop);
             host.post_app_message(luil::app_message { backdrop_intent { backdrop } });
+        }
+        else if (command.command == header_automatic_command || command.command == header_top_command || command.command == header_bottom_command)
+        {
+            // 창 자리는 UI thread가 맞추므로 여기서 옮기고 고른 위치를 앱 상태로 알린다. 다음 실행도 그 위치로 연다.
+            const auto placement { command.command == header_top_command ? header_placement::top : command.command == header_bottom_command ? header_placement::bottom : header_placement::automatic };
+            window_.set_header_placement(placement);
+            if (!placement_file_.empty() && placement_.has_value())
+                save_window_placement(placement_file_, *placement_, window_.header_bottom(), window_.collapsed(), window_.placement());
+            host.post_app_message(luil::app_message { header_placement_intent { placement } });
         }
         else if (command.command == opacity_command || command.command == opacity_change_command)
         {

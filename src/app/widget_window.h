@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/widget_layout.h"
+
 #include <windows.h>
 
 #include <commctrl.h>
@@ -17,6 +19,9 @@ namespace session_board {
     // 진하기를 인자만큼 바꾼다 (끌기, 키).
     inline constexpr std::uint32_t opacity_change_command { 7 };
     inline constexpr std::uint32_t backdrop_blur_command { 8 };
+    inline constexpr std::uint32_t header_automatic_command { 9 };
+    inline constexpr std::uint32_t header_top_command { 10 };
+    inline constexpr std::uint32_t header_bottom_command { 11 };
     inline constexpr float widget_default_opacity { 0.35f };
     inline constexpr int widget_width { 400 };
     inline constexpr int widget_height { 560 };
@@ -54,15 +59,19 @@ namespace session_board {
         widget_window& operator=(const widget_window&) = delete;
         // 저장한 배치로 연 창이면 `keep_size`를 켠다. luil이 이미 그 크기로 세웠다.
         // `dark`는 지금 앱 테마가 어두운가다. acrylic 색 막을 명암에 맞춘다.
-        [[nodiscard]] bool attach(bool keep_size, bool header_bottom, std::function<void()> layout_changed, std::function<bool()> dark);
+        //  - 머릿줄 위치를 위·아래로 정해 두었으면 저장한 방향보다 그것을 따른다.
+        [[nodiscard]] bool attach(bool keep_size, bool header_bottom, header_placement placement, std::function<void()> layout_changed, std::function<bool()> dark);
         void set_backdrop(widget_backdrop backdrop);
         // 진하기를 0~1로 다듬어 둔다. 100%에 들어서거나 벗어날 때만 합성을 다시 건다.
         void set_opacity(float opacity);
         void toggle_collapse();
+        // 창 사각형은 그대로 두고 머릿줄을 정한 끝으로 옮긴다. 자동이면 지금 방향에서 다시 맞춘다.
+        void set_header_placement(header_placement placement);
         void toggle_pin();
         [[nodiscard]] HWND handle() const noexcept;
         [[nodiscard]] bool collapsed() const noexcept;
         [[nodiscard]] bool header_bottom() const noexcept;
+        [[nodiscard]] header_placement placement() const noexcept;
         // 마지막으로 맞춘 창 사각형이다. luil이 크기 변경을 새 frame과 함께 내려고 미루는 동안에도 그 목표 자리다.
         [[nodiscard]] RECT bounds() const noexcept;
         [[nodiscard]] int notification_room() const noexcept;
@@ -77,6 +86,8 @@ namespace session_board {
     private:
         // luil이 창 상태가 바뀔 때 DWM 테두리를 자기 값으로 되돌리므로 그 뒤에 다시 건다.
         void apply_composition();
+        // 머릿줄 화면 좌표를 두고 작업 영역 안에 창을 맞춘다. 높이는 접기 전 높이다.
+        [[nodiscard]] widget_layout fit(const RECT& work, int x, int header_y, int width, int height, int caption) const noexcept;
         void fit_position(WINDOWPOS& position);
         static LRESULT CALLBACK subclass(HWND window, UINT message, WPARAM word, LPARAM data, UINT_PTR id, DWORD_PTR reference);
         HWND window_ { nullptr };
@@ -87,6 +98,7 @@ namespace session_board {
         float opacity_ { widget_default_opacity };
         int expanded_height_ { widget_height };
         bool header_bottom_ { false };
+        header_placement placement_ { header_placement::automatic };
         bool changing_collapse_ { false };
         bool dragging_caption_ { false };
         POINT drag_offset_ {};

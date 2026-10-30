@@ -166,6 +166,11 @@ namespace session_board {
     {
         widget_backdrop backdrop { widget_backdrop::acrylic };
     };
+    // 위젯 창이 머릿줄을 옮긴 뒤 알리는 머릿줄 위치다. 설정 판의 선택만 따라 그린다.
+    struct header_placement_intent
+    {
+        header_placement placement { header_placement::automatic };
+    };
     // 위젯 창이 다듬어 둔 진하기다. 100%에서 DWM 합성을 꺼야 하므로 슬라이더는 위젯 창(UI thread)에 먼저 알리고,
     // 그쪽이 합성을 고친 뒤 이 값을 보낸다.
     struct opacity_intent
@@ -229,9 +234,12 @@ namespace session_board {
     // 창(위젯·상세)의 마지막 자리와 크기다. 값이 없거나 깨졌으면 빈 값이라 기본 자리로 연다.
     [[nodiscard]] std::optional<luil::win32::window_placement> load_window_placement(const std::filesystem::path& file);
     // 실패해도 창 동작을 막지 않는다. 다음 이동 때 다시 쓴다.
-    //  - 위젯은 머릿줄 방향과 목록을 접어 두었는지도 함께 적는다. 접혀 있어도 크기는 펼친 크기다.
-    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, bool header_bottom = false, bool collapsed = false) noexcept;
+    //  - 위젯은 머릿줄 방향, 목록을 접어 두었는지, 머릿줄 위치를 정해 두었는지도 함께 적는다. 접혀 있어도 크기는 펼친 크기다.
+    void save_window_placement(const std::filesystem::path& file, const luil::win32::window_placement& placement, bool header_bottom = false, bool collapsed = false,
+        header_placement header = header_placement::automatic) noexcept;
     [[nodiscard]] bool load_widget_header_bottom(const std::filesystem::path& file) noexcept;
+    // 없거나 모르는 값이면 자동이다.
+    [[nodiscard]] header_placement load_widget_header_placement(const std::filesystem::path& file) noexcept;
     [[nodiscard]] bool load_widget_collapsed(const std::filesystem::path& file) noexcept;
 
     [[nodiscard]] luil::caption_config board_caption();
@@ -338,6 +346,7 @@ namespace session_board {
         float status_popup_x_ { 0.0f };
         std::u8string accent_id_ { luil::default_accent_id };
         widget_backdrop backdrop_ { widget_backdrop::acrylic };
+        header_placement header_placement_ { header_placement::automatic };
         float opacity_ { widget_default_opacity };
         float card_opacity_ { widget_default_card_opacity };
         // 상세 창의 마지막 자리다. 비어 있으면 위젯 왼쪽의 기본 자리로 연다.
@@ -386,7 +395,9 @@ namespace session_board {
         // `restored`는 저장한 자리로 연 실행이다.
         // `appearance`의 흐림·진하기로 위젯 창의 DWM 합성을 처음부터 맞춘다.
         // `collapsed`면 목록을 접은 채로 연다 (지난번에 접어 둔 채 닫은 실행).
-        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance, widget_appearance appearance = {}, bool header_bottom = false, bool collapsed = false);
+        // `header`가 위·아래면 머릿줄을 그 끝에 두고 화면 끝에 닿아도 뒤집지 않는다.
+        board_delegate(std::filesystem::path placement_file, bool restored, single_instance* instance, widget_appearance appearance = {}, bool header_bottom = false, bool collapsed = false,
+            header_placement header = header_placement::automatic);
         void on_started(luil::app_host& host) override;
         void execute_app_ui_command(luil::app_host& host, const luil::app_ui_command& command) override;
         [[nodiscard]] luil::app_message make_window_metrics_message(float width, float height, float scale) override;
@@ -399,6 +410,7 @@ namespace session_board {
         bool restored_ { false };
         bool header_bottom_ { false };
         bool collapsed_ { false };
+        header_placement header_placement_ { header_placement::automatic };
         // 마지막으로 저장한 펼친 자리다. 접고 펼칠 때 자리는 그대로 두고 접힘만 바꿔 다시 쓴다.
         std::optional<luil::win32::window_placement> placement_ {};
         widget_appearance appearance_ {};

@@ -146,7 +146,8 @@ int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
         };
         const bool header_bottom { config.initial_placement.has_value() && session_board::load_widget_header_bottom(placement_file) };
         const bool collapsed { config.initial_placement.has_value() && session_board::load_widget_collapsed(placement_file) };
-        session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance, std::move(appearance), header_bottom, collapsed };
+        const auto header { session_board::load_widget_header_placement(placement_file) };
+        session_board::board_delegate delegate { std::move(placement_file), config.initial_placement.has_value(), &instance, std::move(appearance), header_bottom, collapsed, header };
         session_board::board_policy policy {};
         luil::win32::window_environment environment {};
         environment.driver = &driver;

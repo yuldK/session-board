@@ -162,23 +162,33 @@ namespace session_board {
         void widget_anchoring()
         {
             const widget_area work { -1920, -200, 0, 880 };
-            auto layout { fit_widget(work, -500, 700, 400, 560, 40, false) };
+            auto layout { fit_widget(work, -500, 700, 400, 560, 40, false, false, 0) };
             require(layout.header_bottom && layout.y + layout.height - 40 == 700, "Bottom overflow moved the header while flipping upward.");
-            layout = fit_widget(work, -500, -100, 400, 560, 40, true);
+            layout = fit_widget(work, -500, -100, 400, 560, 40, true, false, 0);
             require(!layout.header_bottom && layout.y == -100, "Top overflow moved the header while flipping downward.");
-            layout = fit_widget(work, -500, 100, 400, 300, 40, true);
+            layout = fit_widget(work, -500, 100, 400, 300, 40, true, false, 0);
             require(layout.header_bottom, "A fitting upward list changed direction unnecessarily.");
             for (const int caption : { 40, 60, 80 })
                 for (int y { work.top }; y <= work.bottom - caption; y += 17)
                     for (const bool bottom : { false, true })
                     {
-                        const auto fitted { fit_widget(work, -500, y, 3000, 3000, caption, bottom) };
+                        const auto fitted { fit_widget(work, -500, y, 3000, 3000, caption, bottom, false, 0) };
                         require(fitted.x >= work.left && fitted.x + fitted.width <= work.right && fitted.y >= work.top && fitted.y + fitted.height <= work.bottom,
                             "Large widget escaped the monitor work area.");
                         require(fitted.y + (fitted.header_bottom ? fitted.height - caption : 0) == y, "Clamping a large widget moved the header.");
                     }
-            layout = fit_widget({ 0, 0, 200, 20 }, 500, 100, 400, 560, 40, false);
+            layout = fit_widget({ 0, 0, 200, 20 }, 500, 100, 400, 560, 40, false, false, 0);
             require(layout.width == 200 && layout.height == 20 && layout.x == 0 && layout.y == 0, "Tiny work area was not respected.");
+            // 머릿줄 위치를 정해 두면 넘쳐도 뒤집지 않고 그쪽 자리로 목록만 줄인다.
+            layout = fit_widget(work, -500, 700, 400, 560, 40, false, true, 0);
+            require(!layout.header_bottom && layout.y == 700 && layout.height == 180, "A fixed top header flipped or moved on bottom overflow.");
+            layout = fit_widget(work, -500, -100, 400, 560, 40, true, true, 0);
+            require(layout.header_bottom && layout.y == -200 && layout.y + layout.height - 40 == -100, "A fixed bottom header flipped or moved on top overflow.");
+            // 남은 자리가 창 최소 높이보다 좁으면 그 높이만큼 머릿줄을 화면 끝에서 뗀다.
+            layout = fit_widget(work, -500, 800, 400, 560, 40, false, true, 180);
+            require(!layout.header_bottom && layout.y == 700 && layout.height == 180, "A fixed top header left less than the minimum list height.");
+            layout = fit_widget(work, -500, -150, 400, 560, 40, true, true, 180);
+            require(layout.header_bottom && layout.y == -200 && layout.height == 180, "A fixed bottom header left less than the minimum list height.");
         }
 
         void hidden_updates()

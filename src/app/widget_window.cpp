@@ -1,5 +1,4 @@
 #include "app/widget_window.h"
-#include "core/widget_layout.h"
 
 #include <dwmapi.h>
 
@@ -82,14 +81,15 @@ namespace session_board {
             RemoveWindowSubclass(window_, subclass, subclass_id);
     }
 
-    bool widget_window::attach(const bool keep_size, const bool header_bottom, std::function<void()> layout_changed, std::function<bool()> dark)
+    bool widget_window::attach(const bool keep_size, const bool header_bottom, const header_placement placement, std::function<void()> layout_changed, std::function<bool()> dark)
     {
         EnumThreadWindows(GetCurrentThreadId(), find_main_window, reinterpret_cast<LPARAM>(&window_));
         if (window_ == nullptr)
             return false;
         if (!SetWindowSubclass(window_, subclass, subclass_id, reinterpret_cast<DWORD_PTR>(this)))
             return false;
-        header_bottom_ = header_bottom;
+        placement_ = placement;
+        header_bottom_ = placement == header_placement::automatic ? header_bottom : placement == header_placement::bottom;
         layout_changed_ = std::move(layout_changed);
         dark_ = std::move(dark);
         tinted_dark_ = dark_ && dark_();
@@ -157,7 +157,7 @@ namespace session_board {
         collapsed_ = !collapsed_;
         const int height { collapsed_ ? caption : expanded_height_ };
         const auto& work { monitor.rcWork };
-        const auto layout { fit_widget({ work.left, work.top, work.right, work.bottom }, box.left, header_y, box.right - box.left, collapsed_ ? expanded_height_ : height, caption, header_bottom_) };
+        const auto layout { fit(work, box.left, header_y, box.right - box.left, collapsed_ ? expanded_height_ : height, caption) };
         header_bottom_ = layout.header_bottom;
         const int target_height { collapsed_ ? caption : layout.height };
         const int target_y { collapsed_ && header_bottom_ ? layout.y + layout.height - caption : layout.y };
@@ -166,6 +166,12 @@ namespace session_board {
         changing_collapse_ = true;
         SetWindowPos(window_, nullptr, layout.x, target_y, layout.width, target_height, SWP_NOACTIVATE | SWP_NOZORDER);
         changing_collapse_ = false;
+    }
+
+    widget_layout widget_window::fit(const RECT& work, const int x, const int header_y, const int width, const int height, const int caption) const noexcept
+    {
+        const int minimum { MulDiv(widget_minimum_height, static_cast<int>(GetDpiForWindow(window_)), 96) };
+        return fit_widget({ work.left, work.top, work.right, work.bottom }, x, header_y, width, height, caption, header_bottom_, placement_ != header_placement::automatic, minimum);
     }
 
     void widget_window::fit_position(WINDOWPOS& position)
@@ -186,7 +192,7 @@ namespace session_board {
         if (!GetMonitorInfoW(MonitorFromRect(&header, MONITOR_DEFAULTTONEAREST), &monitor))
             return;
         const auto& work { monitor.rcWork };
-        const auto layout { fit_widget({ work.left, work.top, work.right, work.bottom }, x, header_y, width, collapsed_ ? expanded_height_ : height, caption, header_bottom_) };
+        const auto layout { fit(work, x, header_y, width, collapsed_ ? expanded_height_ : height, caption) };
         header_bottom_ = layout.header_bottom;
         const int fitted_header { layout.y + (header_bottom_ ? layout.height - caption : 0) };
         position.x = layout.x;
@@ -197,6 +203,19 @@ namespace session_board {
         if (!changing_collapse_)
             expanded_height_ = layout.height;
         bounds_ = { position.x, position.y, position.x + position.cx, position.y + position.cy };
+    }
+
+    void widget_window::set_header_placement(const header_placement placement)
+    {
+        placement_ = placement;
+        if (placement != header_placement::automatic)
+            header_bottom_ = placement == header_placement::bottom;
+        // 같은 사각형으로 다시 맞추면 바뀐 끝에 머릿줄을 두고 목록을 반대쪽으로 편다. 접혀 있으면 머릿줄 자리가 그대로다.
+        const RECT box { bounds_ };
+        SetWindowPos(window_, nullptr, box.left, box.top, box.right - box.left, box.bottom - box.top, SWP_NOZORDER | SWP_NOACTIVATE);
+        // 사각형이 그대로면 옮김 알림이 오지 않는다. 머릿줄 방향이 바뀐 것은 여기서 알린다.
+        if (layout_changed_)
+            layout_changed_();
     }
 
     void widget_window::toggle_pin()
@@ -218,6 +237,11 @@ namespace session_board {
     bool widget_window::header_bottom() const noexcept
     {
         return header_bottom_;
+    }
+
+    header_placement widget_window::placement() const noexcept
+    {
+        return placement_;
     }
 
     RECT widget_window::bounds() const noexcept

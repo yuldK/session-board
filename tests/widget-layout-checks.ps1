@@ -197,6 +197,48 @@ try {
     $null = Wait-Header $top_y
     Assert-Layout ((Get-Box).top -eq $top_y) 'Top overflow did not place the list below the fixed header.'
     Save-LuilShot -path (Join-Path $work_directory 'header-top.png')
+    # 머릿줄 위치를 아래로 정하면 창 사각형은 그대로 두고 머릿줄만 바닥으로 옮긴다.
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    Assert-Layout ((Get-LuilState (Wait-LuilElement -id 'header-automatic' -all_surfaces)).selected) 'Header placement did not start as automatic.'
+    Select-LuilItem (Wait-LuilElement -id 'header-bottom' -all_surfaces)
+    $null = Wait-Header ($top_y + $height - $caption)
+    $box = Get-Box
+    Assert-Layout ($box.top -eq $top_y -and $box.bottom -eq $top_y + $height) 'Choosing a bottom header moved the widget.'
+    Assert-Layout ((Get-LuilState (Wait-LuilElement -id 'header-bottom' -all_surfaces)).selected) 'The bottom header choice was not selected.'
+    Save-LuilShot -path (Join-Path $work_directory 'settings-header-placement.png') -surface (Get-PopupSurface 'header-bottom')
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Wait-LuilElement -id 'header-bottom' -all_surfaces -absent
+    # 정해 둔 아래 머릿줄은 화면 위 끝에 닿아도 뒤집지 않는다. 목록이 창 최소 높이를 얻을 만큼만 화면 끝에서 떨어진다.
+    #  접고 펼쳐도 머릿줄은 제자리다.
+    $minimum = [int](180 * $scale)
+    Move-Widget $x ($top_y + $caption - $height) $width $height
+    $fixed_y = $work.top + $minimum - $caption
+    $null = Wait-Header $fixed_y
+    $box = Get-Box
+    Assert-Layout ($box.top -eq $work.top -and $box.bottom -eq $fixed_y + $caption) 'A fixed bottom header flipped or squeezed the list at the top edge.'
+    Save-LuilShot -path (Join-Path $work_directory 'header-fixed-bottom.png')
+    Toggle-StableHeader $fixed_y $true
+    Toggle-StableHeader $fixed_y $false
+    # 위로 정하면 같은 사각형의 위 끝으로 머릿줄을 옮기고, 화면 아래 끝에 닿아도 뒤집지 않는다.
+    Move-Widget $x $top_y $width $height
+    $null = Wait-Header ($top_y + $height - $caption)
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    Select-LuilItem (Wait-LuilElement -id 'header-top' -all_surfaces)
+    $null = Wait-Header $top_y
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Wait-LuilElement -id 'header-top' -all_surfaces -absent
+    Assert-Layout ((Get-Box).top -eq $top_y -and (Get-Box).bottom -eq $top_y + $height) 'Choosing a top header moved the widget.'
+    Move-Widget $x $bottom_y $width $height
+    $fixed_y = $work.bottom - $minimum
+    $null = Wait-Header $fixed_y
+    Assert-Layout ((Get-Box).top -eq $fixed_y -and (Get-Box).bottom -eq $work.bottom) 'A fixed top header flipped or squeezed the list at the bottom edge.'
+    Save-LuilShot -path (Join-Path $work_directory 'header-fixed-top.png')
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    Select-LuilItem (Wait-LuilElement -id 'header-automatic' -all_surfaces)
+    Invoke-LuilElement (Wait-LuilElement -id 'widget-backdrop')
+    $null = Wait-LuilElement -id 'header-automatic' -all_surfaces -absent
+    Move-Widget $x $top_y $width $height
+    $null = Wait-Header $top_y
     Move-Widget $x $top_y (($work.right - $work.left) * 3) (($work.bottom - $work.top) * 3)
     $box = Get-Box
     Assert-Layout ($box.left -ge $work.left -and $box.top -ge $work.top -and $box.right -le $work.right -and $box.bottom -le $work.bottom) 'Oversized widget escaped the monitor work area.'
@@ -336,7 +378,7 @@ try {
     $null = Wait-LuilElement -name '바로 커밋할까요?' -all_surfaces -absent
     @{
         checks = $checks; desktop = $desktop_name.ToString(); scale = $scale; isolated = $true
-        header_top = $true; header_bottom = $true; header_anchor = $true; caption_hit = $true; work_area_limit = $true
+        header_top = $true; header_bottom = $true; header_anchor = $true; header_placement = $true; caption_hit = $true; work_area_limit = $true
         notification_above = $true; notification_below = $true; finished_work = $true; notification_scroll = $true
         persistent_response = $true; external_response_expiry = $true; collapse_cycles = 40
     } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $work_directory 'verification.json') -Encoding utf8NoBOM
